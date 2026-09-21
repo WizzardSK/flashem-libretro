@@ -11,6 +11,7 @@
 #include <stdio.h>
 
 /* Forward declarations */
+static int wild_tracing(void);
 static int hle_service_intercept(void *ctx, uint32_t addr);
 
 /* ============================================================
@@ -969,6 +970,14 @@ static uint32_t mem_read32(void *ctx, uint32_t addr) {
     /* Fast path: RAM (most common — ~90% of all accesses) */
     if (__builtin_expect(addr >= VFLASH_RAM_BASE && addr < VFLASH_RAM_BASE + VFLASH_RAM_SIZE, 1)) {
         uint32_t roff = addr - VFLASH_RAM_BASE;
+        if (__builtin_expect(roff >= 0xB0DF00 && roff < 0xB0DF20, 0) && wild_tracing()) {
+            static int tr;
+            if (tr < 20) {
+                printf("[TASKTBL] read [%08X] = %08X from PC=%08X LR=%08X\n",
+                       addr, *(uint32_t*)(vf->ram + roff), vf->cpu.r[15], vf->cpu.r[14]);
+                tr++;
+            }
+        }
         /* Flash completion: µMORE loop checks [0x10BBCFF4] and [0x10BBD010].
          * Force bit 0 on both to signal operation complete. */
         /* (render context trace removed) */
@@ -1789,7 +1798,17 @@ static void mem_write32(void *ctx, uint32_t addr, uint32_t val) {
         }
 
         /* Primary IRQ + timers */
-        if (off < 0x200) { ztimer_write(&vf->timer, off, val); return; }
+        if (off < 0x200) {
+            if (wild_tracing()) {
+                static int tw;
+                if (tw < 24) {
+                    printf("[TIMERW] reg=%03X val=%08X from PC=%08X LR=%08X bp=%d\n",
+                           off, val, vf->cpu.r[15], vf->cpu.r[14], vf->boot_phase);
+                    tw++;
+                }
+            }
+            ztimer_write(&vf->timer, off, val); return;
+        }
 
         /* Secondary interrupt controller at 0xDC000000 (off = 0x5C000000) */
         if (off >= 0x5C000000u && off < 0x5C001000u) {
@@ -2947,13 +2966,14 @@ static void install_vector_table(VFlash *vf) {
 
     /* Stub addresses — stubs sit at HLE_STUB_BASE */
 #define STUB(n) (HLE_STUB_BASE + (n) * 20)  /* 5 instructions each */
+#define IRQ_HANDLER_BASE (HLE_STUB_BASE + 7 * 20)  /* 44 bytes, past the grid */
     ram_w32(vf, VFLASH_RAM_BASE + 0x20, STUB(0));  /* reset  */
     ram_w32(vf, VFLASH_RAM_BASE + 0x24, STUB(1));  /* undef  */
     ram_w32(vf, VFLASH_RAM_BASE + 0x28, STUB(2));  /* swi    */
     ram_w32(vf, VFLASH_RAM_BASE + 0x2C, STUB(3));  /* pabt   */
     ram_w32(vf, VFLASH_RAM_BASE + 0x30, STUB(4));  /* dabt   */
     ram_w32(vf, VFLASH_RAM_BASE + 0x34, 0);
-    ram_w32(vf, VFLASH_RAM_BASE + 0x38, STUB(5));  /* irq    */
+    ram_w32(vf, VFLASH_RAM_BASE + 0x38, IRQ_HANDLER_BASE);  /* irq    */
     ram_w32(vf, VFLASH_RAM_BASE + 0x3C, STUB(6));  /* fiq    */
 #undef STUB
 
@@ -3013,9 +3033,14 @@ static void install_vector_table(VFlash *vf) {
              *
              * Note: we write callback address AFTER loading BOOT.BIN
              * in the HLE boot setup. For now, write 0 (no callback). */
-            uint32_t irq_base = HLE_STUB_BASE + 5 * 20;
+            /* The stub grid is 20 bytes per vector and this handler is 44, so
+             * it cannot live in slot 5: the FIQ stub written next would land on
+             * its tail and take the return and both literals with it. It goes
+             * after all seven stubs instead, and the vector at 0x18 points here
+             * (see IRQ_HANDLER_BASE). */
+            uint32_t irq_base = IRQ_HANDLER_BASE;
             ram_w32(vf, irq_base +  0, 0xE92D500Fu);  /* PUSH {R0-R3,R12,LR} */
-            ram_w32(vf, irq_base +  4, 0xE59F0014u);  /* LDR R0, [PC, #+0x14] → +20 */
+            ram_w32(vf, irq_base +  4, 0xE59F0018u);  /* LDR R0, [PC, #+0x18] → +36 */
             ram_w32(vf, irq_base +  8, 0xE3A01001u);  /* MOV R1, #1 */
             ram_w32(vf, irq_base + 12, 0xE5801000u);  /* STR R1, [R0] */
             ram_w32(vf, irq_base + 16, 0xE59F0010u);  /* LDR R0, [PC, #+0x10] → +24 */
@@ -3043,7 +3068,7 @@ static void install_vector_table(VFlash *vf) {
     printf("[HLE]   0x00 RESET → 0x%08X\n", HLE_STUB_BASE + 0 * 20);
     printf("[HLE]   0x04 UNDEF → 0x%08X (fatal loop)\n", HLE_STUB_BASE + 1 * 20);
     printf("[HLE]   0x08 SWI   → 0x%08X\n", HLE_STUB_BASE + 2 * 20);
-    printf("[HLE]   0x18 IRQ   → 0x%08X\n", HLE_STUB_BASE + 5 * 20);
+    printf("[HLE]   0x18 IRQ   → 0x%08X\n", IRQ_HANDLER_BASE);
     printf("[HLE]   0x1C FIQ   → 0x%08X\n", HLE_STUB_BASE + 6 * 20);
 }
 
@@ -3341,11 +3366,19 @@ static int vflash_hle_boot(VFlash *vf) {
 
                         /* Task #0 entry at 0x10B0DF00 */
                         uint32_t task0 = 0xB0DF00;  /* RAM offset */
+                        /* Entry layout, read off the routine at +0xC4A4 that
+                         * walks this table (stride 0x10, 31 entries):
+                         *   +0 IRQ mask, +4 VIC vector value, +8 callback or
+                         *   -1 for "mask only", +12 active.
+                         * The callback field held the address of that very
+                         * routine, which is not a task handler at all - anything
+                         * dispatching through it re-entered the VIC setup. Mask
+                         * only, and BOOT.BIN fills the rest in itself. */
                         *(uint32_t*)(vf->ram + task0 + 0x00) = 0x00000001; /* IRQ mask: bit 0 (timer) */
                         *(uint32_t*)(vf->ram + task0 + 0x04) = 0;
-                        *(uint32_t*)(vf->ram + task0 + 0x08) = load_addr + 0xC4A4; /* callback = VIC init */
+                        *(uint32_t*)(vf->ram + task0 + 0x08) = 0xFFFFFFFFu;  /* no callback */
                         *(uint32_t*)(vf->ram + task0 + 0x0C) = 1; /* active */
-                        printf("[HLE] Task #0: mask=0x1 callback=0x%08X\n", load_addr + 0xC4A4);
+                        printf("[HLE] Task #0: mask=0x1, no callback (mask-only entry)\n");
 
                         /* IRQ callback = 0 (just clear timer, no dispatch).
                          * Game code will be called directly from ROM stub. */
@@ -3820,6 +3853,101 @@ static void play_wav_from_cd(VFlash *vf, CDEntry *entry) {
 static int hle_service_intercept(void *ctx, uint32_t addr) {
     VFlash *vf = ctx;
     ARM9 *cpu = &vf->cpu;
+
+    /* The stub at 0x1880 stands in for the boot ROM, so it has to do what the
+     * ROM does on entry: program the tick. A warm reboot leaves timer0 disabled
+     * (ctrl = 0x10, see the reboot paths), and with no ROM to reprogram it the
+     * RTOS sits in the idle loop forever - no tick, no task dispatch, nothing.
+     * Periodic, 32-bit, interrupt enabled, 150 MHz / 37500 = 4 kHz. */
+    /* One-shot disassembly of the routine the stub calls, so its use of the
+     * task table can be read rather than guessed (VFLASH_WILD=1). */
+    if (addr == 0x1880 && wild_tracing()) {
+        static int dumped;
+        if (!dumped) {
+            dumped = 1;
+            for (uint32_t a = 0x10A111E0; a <= 0x10A11228; a += 4) {
+                uint32_t insn = *(uint32_t*)(vf->ram + (a - 0x10000000));
+                char buf[128];
+                arm_disasm(a, insn, buf, sizeof(buf));
+                printf("[DIS] %08X  %08X  %s\n", a, insn, buf);
+            }
+        }
+    }
+
+    /* Warm reboot. The RTOS restarts the machine by jumping to the reset
+     * vector, where a real console finds the boot ROM: it re-enters BOOT.BIN
+     * through the entry in its header rather than running anything at PA 0.
+     * In HLE mode PA 0 holds a stub that does none of that, so execution walked
+     * into the RTOS stack setup with a stale LR - which is how the µMORE task
+     * table ended up being executed. BOOT.BIN's header word at +0x14 is that
+     * entry (0x10C0011C for every disc seen so far, loaded via
+     * LDR PC,[PC,-#4] at +0x10). */
+    if (addr == 0 && !vf->has_rom && vf->boot_phase < 900) {
+        static int warm_count;
+        static uint64_t last_cycles;
+        warm_count++;
+        printf("[HLE] Warm vector RAM[0xFFC8] = %08X %08X %08X %08X\n",
+               *(uint32_t*)(vf->ram + 0xFFC8), *(uint32_t*)(vf->ram + 0xFFCC),
+               *(uint32_t*)(vf->ram + 0xFFD0), *(uint32_t*)(vf->ram + 0xFFD4));
+        printf("[HLE] Warm reboot #%d: from LR=%08X, %llu cycles since the last one, "
+               "boot status [0x900A000C]=%08X\n",
+               warm_count, cpu->r[14],
+               (unsigned long long)(cpu->cycles - last_cycles),
+               vf->misc_regs[0x0C >> 2]);
+        last_cycles = cpu->cycles;
+        if (warm_count > 8) {
+            /* A real console would keep rebooting too, but a storm here means
+             * the warm path is missing something BOOT.BIN looks at, and a core
+             * that burns the whole frame budget on it looks hung. Stop and let
+             * the trace above say where it came from. */
+            static int said;
+            if (!said) {
+                said = 1;
+                printf("[HLE] Warm reboot loop - refusing further resets\n");
+            }
+            cpu->r[15] = 0x1898;   /* the stub's idle loop */
+            return 1;
+        }
+        /* Where a warm boot goes. BOOT.BIN's init leaves a vector at
+         * RAM[0xFFC8] - "LDR PC,[PC,#0]" followed by the address - and that is
+         * what the ROM jumps through on a reset; the ROM-mode reboot path in
+         * this file patches the same words. Sending it to BOOT.BIN's cold entry
+         * instead is what made it ask for another reset immediately, nought
+         * cycles later, over and over. */
+        uint32_t warm_entry = 0;
+        if (*(uint32_t*)(vf->ram + 0xFFC8) == 0xE59FF000u)
+            warm_entry = 0x1000FFC8;                      /* run the vector */
+        else
+            warm_entry = *(uint32_t*)(vf->ram + 0xC00014); /* fall back: cold entry */
+        if (warm_entry >= VFLASH_RAM_BASE && warm_entry < VFLASH_RAM_BASE + VFLASH_RAM_SIZE) {
+            uint32_t ttb = cpu->cp15.ttb;
+            int mmu = cpu->cp15.mmu_enabled;
+            uint32_t ctrl = cpu->cp15.control;
+            arm9_reset(cpu);
+            /* The RTOS built these page tables and BOOT.BIN expects to keep
+             * running under them; a reset would drop them on the floor. */
+            cpu->cp15.ttb = ttb;
+            cpu->cp15.mmu_enabled = mmu;
+            cpu->cp15.control = ctrl;
+            cpu->cpsr = 0x000000D3;   /* SVC, IRQ+FIQ masked, ARM */
+            cpu->r[13] = 0x11000000;
+            cpu->r[15] = warm_entry;
+            vf->misc_regs[0x0C >> 2] |= 0x02;  /* warm boot flag, as the ROM sets */
+            printf("[HLE] Warm reboot → BOOT.BIN entry 0x%08X\n", warm_entry);
+            return 1;
+        }
+    }
+
+    if (addr == 0x1880 && !vf->has_rom) {
+        if (!(vf->timer.timer[0].ctrl & 0x81)) {
+            vf->timer.timer[0].load  = 37500;
+            vf->timer.timer[0].count = 37500;
+            vf->timer.timer[0].ctrl  = 0xE2;
+            vf->timer.irq.enable    |= 0x01;
+            printf("[HLE] ROM stub: timer0 programmed (periodic 4 kHz, IRQ on)\n");
+        }
+        return 0;
+    }
 
     /* Capture palette: if render code hits tile LUT functions,
      * R5/R6 holds the 32-bit ARGB palette pointer (256 entries × 4 bytes). */

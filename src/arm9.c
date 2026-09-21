@@ -879,7 +879,10 @@ static void wild_check(ARM9 *cpu, uint32_t addr, uint32_t insn)
             romcall_seen++;
         }
     }
-    if (addr < 0x2000 || (addr >= 0x10000000 && addr < 0x11000000))
+    /* Executing the µMORE task table is not "out of range" by address, but it
+     * is just as wrong, so it counts as landing off the rails. */
+    if (!(addr >= 0x10B0DF00 && addr < 0x10B0E000) &&
+        (addr < 0x2000 || (addr >= 0x10000000 && addr < 0x11000000)))
         return;
     printf("[WILD] PC=%08X insn=%08X LR=%08X SP=%08X CPSR=%08X\n",
            addr, insn, cpu->r[14], cpu->r[13], CPSR);
@@ -926,7 +929,9 @@ int arm9_step(ARM9 *cpu) {
         }
         wild_ring[wild_ring_pos] = inst_addr;
         wild_ring_pos = (wild_ring_pos + 1) % WILD_RING;
-        if (wild_state <= 0)
+        if (__builtin_expect(wild_state == -1, 0))
+            wild_state = getenv("VFLASH_WILD") ? 0 : -2;
+        if (__builtin_expect(wild_state == 0, 0))
             wild_check(cpu, inst_addr, i);
 
         /* IRQ vector chain trace: log what CPU fetches/executes at 0x18 */
