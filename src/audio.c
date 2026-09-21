@@ -1,9 +1,12 @@
 #include "audio.h"
+#ifndef FLASHEM_NO_SDL
 #include <SDL2/SDL.h>
+#endif
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 
+#ifndef FLASHEM_NO_SDL
 static void audio_callback(void *userdata, uint8_t *stream, int len) {
     Audio *a = userdata;
     int16_t *out = (int16_t*)stream;
@@ -20,6 +23,7 @@ static void audio_callback(void *userdata, uint8_t *stream, int len) {
         }
     }
 }
+#endif /* FLASHEM_NO_SDL */
 
 Audio* audio_create(void) {
     Audio *a = calloc(1, sizeof(Audio));
@@ -31,11 +35,14 @@ Audio* audio_create(void) {
 
 void audio_destroy(Audio *a) {
     if (!a) return;
+#ifndef FLASHEM_NO_SDL
     if (a->initialized) SDL_CloseAudio();
+#endif
     free(a->buf);
     free(a);
 }
 
+#ifndef FLASHEM_NO_SDL
 int audio_init_sdl(Audio *a) {
     SDL_AudioSpec want = {0}, got;
     want.freq     = AUDIO_SAMPLE_RATE;
@@ -55,6 +62,42 @@ int audio_init_sdl(Audio *a) {
     SDL_PauseAudio(0);
     a->initialized = 1;
     return 1;
+}
+#else
+int audio_init_sdl(Audio *a) {
+    (void)a;
+    return 0;
+}
+#endif /* FLASHEM_NO_SDL */
+
+/* For a frontend that takes the samples itself - the libretro core drains the
+ * ring buffer in retro_run. Everything that gates on "is the output running"
+ * (WAV playback, see vflash.c) needs this set, and there is no device to open. */
+void audio_init_external(Audio *a) {
+    if (a)
+        a->initialized = 1;
+}
+
+/* How many samples are waiting, and moving them out. Both are the ring buffer
+ * arithmetic the SDL callback does, in a form a pull-based frontend can use. */
+uint32_t audio_available(const Audio *a) {
+    if (!a || !a->buf)
+        return 0;
+    if (a->write_pos >= a->read_pos)
+        return a->write_pos - a->read_pos;
+    return a->buf_size - a->read_pos + a->write_pos;
+}
+
+uint32_t audio_pull_samples(Audio *a, int16_t *out, uint32_t max) {
+    uint32_t n = 0;
+    if (!a || !a->buf || !out)
+        return 0;
+    while (n < max && a->read_pos != a->write_pos) {
+        int32_t s = a->buf[a->read_pos];
+        out[n++] = (int16_t)(s * (int32_t)a->volume / 256);
+        a->read_pos = (a->read_pos + 1) % a->buf_size;
+    }
+    return n;
 }
 
 void audio_push_samples(Audio *a, const int16_t *samples, uint32_t count) {

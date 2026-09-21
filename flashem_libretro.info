@@ -1,0 +1,33 @@
+# Software Information
+display_name = "V.Flash (FlashEm)"
+authors = "WizzardSK"
+supported_extensions = "cue|bin|iso"
+corename = "FlashEm"
+categories = "Emulator"
+license = "Unknown"
+permissions = ""
+display_version = "0.1"
+
+# Hardware Information
+manufacturer = "VTech"
+systemname = "V.Flash"
+systemid = "vflash"
+
+# Libretro Features
+database = "VTech - V.Flash"
+supports_no_game = "false"
+firmware_count = 0
+savestate = "false"
+cheats = "false"
+input_descriptors = "true"
+memory_descriptors = "false"
+libretro_saves = "false"
+core_options = "false"
+load_subsystem = "false"
+hw_render = "false"
+needs_fullpath = "true"
+block_extract = "true"
+disk_control = "false"
+is_experimental = "true"
+
+description = "Emulator for the VTech V.Flash, also sold as the V.Smile Pro: a 2006 educational console built on an LSI ZEVIO 1020 (ARM926EJ-S) that plays CD-ROMs. The first emulator for the system, and early: it boots discs and decodes their MJP video, and saves states are not implemented yet."

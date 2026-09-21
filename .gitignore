@@ -11,3 +11,7 @@ vflash_dbg
 *.cue
 *.bin
 !testrom.bin
+flashem
+*.so
+*.dylib
+*.dll

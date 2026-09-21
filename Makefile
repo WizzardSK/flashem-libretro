@@ -6,7 +6,7 @@ SRCS = src/main.c src/vflash.c src/arm9.c src/cp15.c src/cdrom.c \
        src/mjp.c src/audio.c src/ptx.c src/ztimer.c src/disasm.c \
        src/debugger.c src/jit.c
 OBJS = $(SRCS:.c=.o)
-BIN  = vflash
+BIN  = flashem
 
 TOOLS = disc_analyze mjp_extract ptx_extract disc_compare testrom_gen
 

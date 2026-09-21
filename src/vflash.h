@@ -62,6 +62,10 @@ void    vflash_run_frame(VFlash *vf);
 void    vflash_set_input(VFlash *vf, uint32_t buttons);
 uint32_t* vflash_get_framebuffer(VFlash *vf);
 void    vflash_init_audio(VFlash *vf);
+/* The audio ring buffer, for a frontend that takes the samples itself
+ * (see audio_init_external / audio_pull_samples). */
+struct Audio;
+void   *vflash_get_audio(VFlash *vf);
 void    vflash_set_debug(VFlash *vf, int on);
 
 /* ---- Debugger API ---- */

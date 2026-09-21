@@ -1702,7 +1702,12 @@ static void mem_write32(void *ctx, uint32_t addr, uint32_t val) {
          * from managing its own state fields (all zeros became 1). */
         /* Force game_main start flag to 1 when read */
         if (roff == 0xBE49E0 && vf->boot_phase >= 800) {
-            return 1;
+            /* Bare return: this is the write path and it returns void, so the
+             * 1 was discarded even where the compiler still accepted it (GCC
+             * makes it an error from 14 on). Behaviour is unchanged - the write
+             * is blocked - and what the comment above wanted belongs in the
+             * read handler, where 0xBE49E0 is not handled at all. */
+            return;
         }
         if (roff == 0xBE3CA0 && val == 0 && vf->boot_phase >= 900) {
             val = 1; /* keep GPU completion at "done" */
@@ -3694,6 +3699,10 @@ void vflash_destroy(VFlash *vf) {
     free(vf->wav_list);
     free(vf->mjp_list);
     free(vf);
+}
+
+void *vflash_get_audio(VFlash *vf) {
+    return vf ? vf->audio : NULL;
 }
 
 void vflash_init_audio(VFlash *vf) {

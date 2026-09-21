@@ -1,0 +1,122 @@
+# ─────────────────────────────────────────────────────────────
+#  libretro core build
+#
+#  The core is the emulator without its SDL frontend: no window, no SDL audio
+#  device, no debugger. What it needs is a C compiler, libm and libjpeg - the
+#  MJP video decoder uses it - so FLASHEM_NO_SDL keeps audio.c from reaching
+#  for SDL headers that a core build has no reason to carry.
+#
+#  make -f Makefile.libretro platform=unix
+# ─────────────────────────────────────────────────────────────
+
+TARGET_NAME := flashem
+ifeq ($(platform),)
+	platform = unix
+	ifeq ($(shell uname -s),)
+		platform = win
+	else ifneq ($(findstring MINGW,$(shell uname -s)),)
+		platform = win
+	else ifneq ($(findstring Darwin,$(shell uname -s)),)
+		platform = osx
+	endif
+endif
+
+CORE_DIR := .
+SOURCES_C := \
+	$(CORE_DIR)/src/flashem_libretro.c \
+	$(CORE_DIR)/src/vflash.c \
+	$(CORE_DIR)/src/arm9.c \
+	$(CORE_DIR)/src/cp15.c \
+	$(CORE_DIR)/src/cdrom.c \
+	$(CORE_DIR)/src/mjp.c \
+	$(CORE_DIR)/src/audio.c \
+	$(CORE_DIR)/src/ptx.c \
+	$(CORE_DIR)/src/ztimer.c \
+	$(CORE_DIR)/src/disasm.c \
+	$(CORE_DIR)/src/debugger.c \
+	$(CORE_DIR)/src/jit.c
+
+LIBS := -ljpeg -lm
+fpic :=
+SHARED :=
+LDFLAGS :=
+
+# The core is dlopened next to a frontend that has symbols of its own; without
+# this the dynamic linker can bind our calls to the frontend's copies.
+LINK_VERSION_SCRIPT := -Wl,--version-script=$(CORE_DIR)/link.T -Wl,-Bsymbolic
+
+# ── Unix ─────────────────────────────────────────────────────
+ifneq (,$(findstring unix,$(platform)))
+	TARGET := $(TARGET_NAME)_libretro.so
+	fpic := -fPIC
+	SHARED := -shared $(LINK_VERSION_SCRIPT)
+	ifneq (,$(findstring Haiku,$(shell uname -s)))
+		LIBS :=
+	endif
+
+# ── macOS ────────────────────────────────────────────────────
+else ifeq ($(platform), osx)
+	TARGET := $(TARGET_NAME)_libretro.dylib
+	fpic := -fPIC
+	SHARED := -dynamiclib
+	ifeq ($(CROSS_COMPILE),1)
+		TARGET_RULE = -target $(LIBRETRO_APPLE_PLATFORM) -isysroot $(LIBRETRO_APPLE_ISYSROOT)
+		CFLAGS += $(TARGET_RULE)
+		LDFLAGS += $(TARGET_RULE)
+	endif
+
+# ── iOS / tvOS ───────────────────────────────────────────────
+else ifneq (,$(findstring ios,$(platform)))
+	TARGET := $(TARGET_NAME)_libretro_ios.dylib
+	fpic := -fPIC
+	SHARED := -dynamiclib
+	MINVERSION := -miphoneos-version-min=11.0
+	IOSSDK := $(shell xcodebuild -version -sdk iphoneos Path 2>/dev/null)
+	CC := cc -arch arm64 -isysroot $(IOSSDK) $(MINVERSION)
+	CFLAGS += -DIOS
+
+# ── Android ──────────────────────────────────────────────────
+else ifneq (,$(findstring android,$(platform)))
+	TARGET := $(TARGET_NAME)_libretro_android.so
+	fpic := -fPIC
+	SHARED := -shared $(LINK_VERSION_SCRIPT)
+	CC = $(ANDROID_CC)
+
+# ── Emscripten ───────────────────────────────────────────────
+else ifeq ($(platform), emscripten)
+	TARGET := $(TARGET_NAME)_libretro_emscripten.bc
+	STATIC_LINKING = 1
+
+# ── Windows (MinGW) ──────────────────────────────────────────
+else
+	TARGET := $(TARGET_NAME)_libretro.dll
+	CC ?= gcc
+	SHARED := -shared -static-libgcc -Wl,--no-undefined $(LINK_VERSION_SCRIPT)
+endif
+
+ifeq ($(DEBUG), 1)
+	CFLAGS += -O0 -g
+else
+	CFLAGS += -O2 -DNDEBUG
+endif
+
+OBJECTS := $(SOURCES_C:.c=.o)
+CFLAGS  += -Wall -Wextra -std=gnu11 $(fpic) -I$(CORE_DIR)/src -DFLASHEM_NO_SDL
+
+all: $(TARGET)
+
+ifeq ($(STATIC_LINKING), 1)
+$(TARGET): $(OBJECTS)
+	$(AR) rcs $@ $(OBJECTS)
+else
+$(TARGET): $(OBJECTS)
+	$(CC) $(fpic) $(SHARED) $(LDFLAGS) -o $@ $(OBJECTS) $(LIBS)
+endif
+
+%.o: %.c
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+clean:
+	rm -f $(OBJECTS) $(TARGET)
+
+.PHONY: all clean

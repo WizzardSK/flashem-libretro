@@ -6,7 +6,7 @@
 
 static void print_usage(const char *prog) {
     fprintf(stderr,
-        "V.Flash Emulator\n"
+        "FlashEm - V.Flash emulator\n"
         "Usage: %s [options] <disc.iso>\n\n"
         "Options:\n"
         "  --debug      Enable I/O trace and register dumps\n"
@@ -91,7 +91,7 @@ int main(int argc, char **argv) {
 
     if (!headless) {
         win = SDL_CreateWindow(
-            "V.Flash Emulator",
+            "FlashEm",
             SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
             VFLASH_SCREEN_W * scale, VFLASH_SCREEN_H * scale,
             SDL_WINDOW_RESIZABLE

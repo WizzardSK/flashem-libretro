@@ -26,6 +26,11 @@ int     audio_init_sdl(Audio *a);
 void    audio_push_samples(Audio *a, const int16_t *samples, uint32_t count);
 void    audio_set_volume(Audio *a, uint32_t vol);
 
+/* Frontends that do their own output: mark the pipeline live, then drain it. */
+void     audio_init_external(Audio *a);
+uint32_t audio_available(const Audio *a);
+uint32_t audio_pull_samples(Audio *a, int16_t *out, uint32_t max);
+
 /* .snd file decoder (PCM WAV) */
 int     snd_decode(const uint8_t *data, uint32_t size,
                    int16_t **out_samples, uint32_t *out_count, uint32_t *out_rate);

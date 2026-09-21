@@ -1,6 +1,6 @@
-# V.Flash Emulator
+# FlashEm
 
-First emulator for the VTech V.Flash (V.Smile Pro) educational console (2006).
+FlashEm is the first emulator for the VTech V.Flash (V.Smile Pro) educational console (2006).
 No other emulator exists for this system.
 
 ## Hardware
@@ -32,6 +32,32 @@ No other emulator exists for this system.
 Scene rendering: 10 parallax layers with per-layer color tinting, circular
 viewport mask from sec[2] tilemap, vertical box filter smoothing, desert sky gradient.
 Background voice/SFX audio plays automatically from WAV files on disc.
+
+## libretro core
+
+```bash
+make -f Makefile.libretro platform=unix   # flashem_libretro.so
+```
+
+The core is the emulator without the SDL frontend: `vflash_run_frame()` once per
+`retro_run`, the 320x240 framebuffer handed over as XRGB8888 at 4:3, and the
+audio ring buffer - which SDL pulls from a callback in the standalone build -
+drained into the frontend's batch callback instead. It takes `.cue`, `.bin` and
+`.iso` by path (`need_fullpath`), because the emulator opens the disc itself.
+
+| RetroPad | V.Flash |
+|----------|---------|
+| D-pad | Up / Down / Left / Right |
+| A | Red |
+| B | Yellow |
+| X | Green |
+| Y | Blue |
+| Start | Enter |
+
+Save states, rewind, run-ahead and netplay are out until the emulator grows a
+serialiser: the ARM core, the MMU, the CD-ROM position and the JIT would all
+have to be written out and read back, and a core that claims a state it cannot
+restore breaks in ways that look like emulation bugs.
 
 ## Status
 
