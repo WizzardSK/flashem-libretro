@@ -406,16 +406,20 @@ make
 ## Run
 
 ```bash
-./vflash game.cue                  # BIN/CUE image
-./vflash game.iso                  # ISO image
-./vflash --debug game.cue          # I/O trace
-./vflash --dbg game.cue            # debugger, paused
-./vflash --dbg-run game.cue        # debugger, running
-./vflash --headless game.cue       # no display
-./vflash --scale 3 game.cue        # 3x window
+./flashem game.cue                  # BIN/CUE image
+./flashem game.iso                  # ISO image
+./flashem --debug game.cue          # I/O trace
+./flashem --dbg game.cue            # debugger, paused
+./flashem --dbg-run game.cue        # debugger, running
+./flashem --headless game.cue       # no display
+./flashem --scale 3 game.cue        # 3x window
 ```
 
-Boot ROM `70004.bin` is auto-detected from current directory or `../vflash-roms/`.
+Boot ROM `70004.bin` is optional — without it the disc is booted by HLE. It is looked for in this order:
+
+1. the frontend's system directory, as `<system>/flashem/70004.bin` or `<system>/70004.bin` (libretro core)
+2. `$FLASHEM_BIOS`, a full path to the file
+3. `70004.bin` in the current directory, then `../vflash-roms/70004.bin`
 
 ## Debugger
 

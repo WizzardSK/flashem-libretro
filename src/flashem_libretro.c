@@ -215,6 +215,18 @@ bool retro_load_game(const struct retro_game_info *game)
 
    environ_cb(RETRO_ENVIRONMENT_SET_INPUT_DESCRIPTORS, (void*)desc);
 
+   /* The boot ROM is optional - without it the emulator boots the disc by HLE -
+    * but when one is there it belongs in the frontend's system directory, not
+    * in whatever the working directory happens to be. */
+   {
+      const char *sysdir = NULL;
+      if (environ_cb(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &sysdir) && sysdir)
+      {
+         vflash_set_bios_dir(sysdir);
+         log_cb(RETRO_LOG_INFO, "FlashEm: looking for 70004.bin in '%s'\n", sysdir);
+      }
+   }
+
    s_vf = vflash_create(game->path);
    if (!s_vf)
    {

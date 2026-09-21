@@ -3580,6 +3580,15 @@ static int vflash_load_rawbin(VFlash *vf, const char *path) {
     return 1;
 }
 
+/* Where the frontend keeps its system files; empty until one says so.
+ * The boot ROM is looked up here first (see vflash_create). */
+static char s_bios_dir[1024];
+
+void vflash_set_bios_dir(const char *dir) {
+    if (!dir) { s_bios_dir[0] = '\0'; return; }
+    snprintf(s_bios_dir, sizeof(s_bios_dir), "%s", dir);
+}
+
 VFlash* vflash_create(const char *disc_path) {
     VFlash *vf = calloc(1, sizeof(VFlash));
 
@@ -3610,14 +3619,27 @@ VFlash* vflash_create(const char *disc_path) {
     else
         printf("[JIT] Disabled by VFLASH_NOJIT\n");
 
-    /* Try to load boot ROM (70004.bin) — enables real boot instead of HLE */
+    /* Try to load boot ROM (70004.bin) — enables real boot instead of HLE.
+     * Where to look, in order: the directory a frontend handed us
+     * (vflash_set_bios_dir — RetroArch's system directory), $FLASHEM_BIOS,
+     * then beside the binary for a standalone run. */
     {
-        const char *rom_paths[] = {
-            "70004.bin",
-            "../vflash-roms/70004.bin",
-            "/home/wizzard/share/GitHub/vflash-roms/70004.bin",
-            NULL
-        };
+        char sys_rom[1024], sys_sub[1024];
+        const char *rom_paths[6];
+        int n = 0;
+
+        if (s_bios_dir[0]) {
+            snprintf(sys_sub, sizeof(sys_sub), "%s/flashem/70004.bin", s_bios_dir);
+            snprintf(sys_rom, sizeof(sys_rom), "%s/70004.bin", s_bios_dir);
+            rom_paths[n++] = sys_sub;
+            rom_paths[n++] = sys_rom;
+        }
+        if (getenv("FLASHEM_BIOS"))
+            rom_paths[n++] = getenv("FLASHEM_BIOS");
+        rom_paths[n++] = "70004.bin";
+        rom_paths[n++] = "../vflash-roms/70004.bin";
+        rom_paths[n] = NULL;
+
         FILE *rom_fp = NULL;
         for (int i = 0; rom_paths[i]; i++) {
             rom_fp = fopen(rom_paths[i], "rb");

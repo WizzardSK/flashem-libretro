@@ -57,6 +57,10 @@ typedef struct CDROM     CDROM;
 typedef struct MJPDecoder MJPDecoder;
 
 VFlash* vflash_create(const char *disc_path);
+/* Directory to look in for the boot ROM (70004.bin), as <dir>/flashem/70004.bin
+ * or <dir>/70004.bin. Set it before vflash_create(); a frontend passes its own
+ * system directory here. */
+void    vflash_set_bios_dir(const char *dir);
 void    vflash_destroy(VFlash *vf);
 void    vflash_run_frame(VFlash *vf);
 void    vflash_set_input(VFlash *vf, uint32_t buttons);
