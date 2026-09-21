@@ -30,7 +30,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#ifndef _WIN32
 #include <sys/select.h>
+#endif
 #include <sys/time.h>
 
 /* ---- Utilities ---- */
@@ -440,6 +442,14 @@ void dbg_resume(void) {
 /* Read one line from stdin (non-blocking if possible).
  * Returns 1 if a line was read, 0 if no input available. */
 static int read_line_nonblock(char *buf, int maxlen) {
+#ifdef _WIN32
+    /* select() on Windows is for sockets, not for a console handle, and the
+     * debugger is a standalone-only feature: a libretro core has no terminal
+     * to read commands from. Say there is no input rather than block. */
+    (void)buf;
+    (void)maxlen;
+    return 0;
+#else
     /* Use select() with timeout=0 for non-blocking check */
     fd_set fds;
     struct timeval tv = {0, 0};
@@ -453,6 +463,7 @@ static int read_line_nonblock(char *buf, int maxlen) {
     while (len > 0 && (buf[len-1] == '\n' || buf[len-1] == '\r'))
         buf[--len] = 0;
     return 1;
+#endif /* _WIN32 */
 }
 
 /* Called once per emulator frame. Returns DBG_QUIT, DBG_PAUSE, or DBG_CONTINUE. */

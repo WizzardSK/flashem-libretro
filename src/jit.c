@@ -5,7 +5,36 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <sys/mman.h>
+#endif
+
+/* One page-level allocator, two operating systems. The cache has to be
+ * writable and executable at the same time because blocks are emitted straight
+ * into it and run from there. */
+static void *jit_cache_alloc(size_t size)
+{
+#ifdef _WIN32
+    return VirtualAlloc(NULL, size, MEM_COMMIT | MEM_RESERVE,
+                        PAGE_EXECUTE_READWRITE);
+#else
+    void *p = mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                   MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    return (p == MAP_FAILED) ? NULL : p;
+#endif
+}
+
+static void jit_cache_free(void *p, size_t size)
+{
+#ifdef _WIN32
+    (void)size;
+    VirtualFree(p, 0, MEM_RELEASE);
+#else
+    munmap(p, size);
+#endif
+}
 #include "jit.h"
 #include "jit_emit.h"
 #include "arm9.h"
@@ -45,10 +74,8 @@ JitContext *jit_create(VFlash *vf) {
     JitContext *jit = calloc(1, sizeof(JitContext));
     if (!jit) return NULL;
 
-    jit->code_cache = mmap(NULL, JIT_CACHE_SIZE,
-                           PROT_READ | PROT_WRITE | PROT_EXEC,
-                           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-    if (jit->code_cache == MAP_FAILED) {
+    jit->code_cache = jit_cache_alloc(JIT_CACHE_SIZE);
+    if (!jit->code_cache) {
         free(jit);
         return NULL;
     }
@@ -67,7 +94,7 @@ JitContext *jit_create(VFlash *vf) {
 
 void jit_destroy(JitContext *jit) {
     if (!jit) return;
-    if (jit->code_cache) munmap(jit->code_cache, jit->cache_size);
+    if (jit->code_cache) jit_cache_free(jit->code_cache, jit->cache_size);
     free(jit->blocks);
     printf("[JIT] Destroyed: %lu blocks compiled, %lu executed, %lu insns\n",
            jit->blocks_compiled, jit->blocks_executed, jit->insns_executed);
