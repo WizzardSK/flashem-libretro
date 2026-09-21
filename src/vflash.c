@@ -1644,9 +1644,27 @@ static uint8_t mem_read8(void *ctx, uint32_t addr) {
     return 0;
 }
 
+/* VFLASH_WILD=1 turns on the boot diagnostics; asked once, not per access. */
+static int wild_tracing(void) {
+    static int on = -1;
+    if (on < 0) on = getenv("VFLASH_WILD") ? 1 : 0;
+    return on;
+}
+
 static void mem_write32(void *ctx, uint32_t addr, uint32_t val) {
     VFlash *vf = ctx;
     addr = mmu_translate(vf, addr);
+
+    /* Who overwrites the HLE ROM stub (VFLASH_WILD=1). On hardware PA 0 is the
+     * boot ROM and this write would not land. */
+    if (__builtin_expect(addr >= 0x1880 && addr < 0x18B8, 0) && wild_tracing()) {
+        static int stub_writes;
+        if (stub_writes < 8) {
+            printf("[STUBWRITE] [%08X] = %08X from PC=%08X LR=%08X\n",
+                   addr, val, vf->cpu.r[15], vf->cpu.r[14]);
+            stub_writes++;
+        }
+    }
 
     /* Fast path: RAM write (most common) */
     if (__builtin_expect(addr >= VFLASH_RAM_BASE && addr < VFLASH_RAM_BASE + VFLASH_RAM_SIZE, 1)) {
@@ -3296,6 +3314,21 @@ static int vflash_hle_boot(VFlash *vf) {
                     for (int i = 0; i < 14; i++)
                         *(uint32_t*)(vf->ram + 0x1880 + i * 4) = stub[i];
                     printf("[HLE] Installed ROM stub at 0x1880 (IRQ enable + VIC init + idle)\n");
+
+                    /* Give PA 0 its own storage. Without a boot ROM the low
+                     * addresses read straight out of SDRAM at the same offsets,
+                     * so the vectors and this stub sit in memory the RTOS owns
+                     * and fills - BOOT.BIN wipes 0x1880 with its 0xCC pattern on
+                     * the first frame and then jumps there, into nothing. On
+                     * hardware that region is the 2 MB ROM and no such write
+                     * lands. low_ram is exactly that window, so take a copy of
+                     * what was installed and serve PA 0 from it. */
+                    if (!vf->has_rom) {
+                        memcpy(vf->low_ram, vf->ram, sizeof(vf->low_ram));
+                        vf->rom_remapped = 1;
+                        printf("[HLE] PA 0 now served from low_ram (%u bytes)\n",
+                               (unsigned)sizeof(vf->low_ram));
+                    }
 
                     /* Populate µMORE task table so VIC init has something to dispatch.
                      * Task table at 0x10B0DF00, 16 bytes per entry, up to 30 entries.
@@ -5055,6 +5088,21 @@ void vflash_run_frame(VFlash *vf) {
     if (vf->frame_count < 5)
         printf("[FRAME-START] frame=%lu PC=%08X bp=%d\n",
                (unsigned long)vf->frame_count, vf->cpu.r[15], vf->boot_phase);
+
+    /* Watch the HLE ROM stub for as long as it matters (VFLASH_WILD=1): it is
+     * ordinary SDRAM here, so anything that fills low memory - including the
+     * HLE memcpy/memset paths, which never go through mem_write32 - can take
+     * it out from under the code that is about to jump there. */
+    if (wild_tracing()) {
+        static uint32_t stub_last = 0xFFFFFFFFu;
+        uint32_t now = *(uint32_t*)(vf->ram + 0x1880);
+        if (now != stub_last) {
+            printf("[STUBWATCH] frame=%lu [0x1880] %08X -> %08X (PC=%08X bp=%d)\n",
+                   (unsigned long)vf->frame_count, stub_last, now,
+                   vf->cpu.r[15], vf->boot_phase);
+            stub_last = now;
+        }
+    }
 
     vf->vid.fb_dirty = 0;
 
@@ -9463,6 +9511,11 @@ void     vflash_set_reg(VFlash *vf, int r, uint32_t val) {
 }
 uint32_t vflash_get_cpsr(VFlash *vf)       { return vf->cpu.cpsr; }
 int      vflash_is_thumb(VFlash *vf)       { return (vf->cpu.cpsr >> 5) & 1; }
+
+/* What the MMU makes of a virtual address right now, for diagnostics. */
+uint32_t vflash_translate(VFlash *vf, uint32_t va) {
+    return mmu_translate(vf, va);
+}
 
 uint32_t vflash_read32(VFlash *vf, uint32_t addr) {
     return vf->cpu.mem_read32(vf, addr);

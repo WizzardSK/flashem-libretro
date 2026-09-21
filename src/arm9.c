@@ -2,6 +2,7 @@
 #include "cp15.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <math.h>
 
 #define PC   cpu->r[15]
@@ -849,6 +850,56 @@ static int insn_cycles_thumb(uint16_t insn) {
  *
  * Thumb pipeline: PC = inst+4 during execution. Same logic, smaller delta.
  */
+/* Where execution ran off to, and how it got there. Enabled with VFLASH_WILD=1:
+ * the last addresses executed are kept in a ring, and the first time the PC
+ * lands outside the regions that hold code - the vectors and ROM stub below
+ * 0x2000, and the 16 MB of SDRAM - the ring is printed. That names the jump
+ * that left the rails, which a PC sitting on the IRQ vector never does. */
+#define WILD_RING 12
+static uint32_t wild_ring[WILD_RING];
+static int      wild_ring_pos;
+static uint32_t wild_jump_from, wild_jump_to;  /* last non-sequential step */
+static int      wild_state = -1;   /* -1 unknown, 0 armed, 1 done, -2 off */
+
+static void wild_check(ARM9 *cpu, uint32_t addr, uint32_t insn)
+{
+    if (wild_state == -1)
+        wild_state = getenv("VFLASH_WILD") ? 0 : -2;
+    if (wild_state != 0)
+        return;
+
+    /* Every entry into the low region is a call into the boot ROM that is not
+     * there. Only 0x1880 is stubbed, so name the others: they are the HLE gaps. */
+    {
+        uint32_t prev = wild_ring[(wild_ring_pos + WILD_RING - 2) % WILD_RING];
+        static int romcall_seen;
+        if (addr < 0x2000 && prev >= 0x10000000 && romcall_seen < 12) {
+            printf("[ROMCALL] %08X from %08X LR=%08X R0=%08X R1=%08X\n",
+                   addr, prev, cpu->r[14], cpu->r[0], cpu->r[1]);
+            romcall_seen++;
+        }
+    }
+    if (addr < 0x2000 || (addr >= 0x10000000 && addr < 0x11000000))
+        return;
+    printf("[WILD] PC=%08X insn=%08X LR=%08X SP=%08X CPSR=%08X\n",
+           addr, insn, cpu->r[14], cpu->r[13], CPSR);
+    {
+        extern uint32_t vflash_translate(void *vf, uint32_t va);
+        printf("[WILD] VA 0x1880 translates to %08X\n",
+               vflash_translate(cpu->mem_ctx, 0x1880));
+    }
+    for (uint32_t a = 0x1880; a <= 0x18B4; a += 4)
+        printf("[WILD] [%08X] = %08X\n", a, cpu->mem_read32(cpu->mem_ctx, a));
+    printf("[WILD] last jump: %08X -> %08X\n", wild_jump_from, wild_jump_to);
+    printf("[WILD] came from:");
+    for (int k = 0; k < WILD_RING; k++) {
+        uint32_t a = wild_ring[(wild_ring_pos + k) % WILD_RING];
+        if (a) printf(" %08X", a);
+    }
+    printf("\n");
+    wild_state = 1;
+}
+
 int arm9_step(ARM9 *cpu) {
     int cyc;
     uint32_t inst_addr;
@@ -865,6 +916,18 @@ int arm9_step(ARM9 *cpu) {
         inst_addr = PC;
         uint32_t i = r32(cpu, inst_addr);
         PC = inst_addr + 8;
+
+        {
+            uint32_t prev_addr = wild_ring[(wild_ring_pos + WILD_RING - 1) % WILD_RING];
+            if (inst_addr != prev_addr + 4) {
+                wild_jump_from = prev_addr;
+                wild_jump_to   = inst_addr;
+            }
+        }
+        wild_ring[wild_ring_pos] = inst_addr;
+        wild_ring_pos = (wild_ring_pos + 1) % WILD_RING;
+        if (wild_state <= 0)
+            wild_check(cpu, inst_addr, i);
 
         /* IRQ vector chain trace: log what CPU fetches/executes at 0x18 */
         if (inst_addr == 0x18 && (CPSR & 0x1F) == 0x12) { /* IRQ mode */

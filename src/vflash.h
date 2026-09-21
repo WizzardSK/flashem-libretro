@@ -81,6 +81,8 @@ uint32_t  vflash_get_cpsr(VFlash *vf);
 int       vflash_is_thumb(VFlash *vf);
 /* Read/write RAM directly (addr is virtual, returns 0 if unmapped) */
 uint32_t  vflash_read32(VFlash *vf, uint32_t addr);
+/* Current MMU translation of a virtual address (diagnostics). */
+uint32_t  vflash_translate(VFlash *vf, uint32_t va);
 uint8_t   vflash_read8(VFlash *vf, uint32_t addr);
 void      vflash_write32(VFlash *vf, uint32_t addr, uint32_t val);
 /* Execute exactly one instruction; returns cycles consumed */
