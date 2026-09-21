@@ -186,6 +186,16 @@ jobs:
             echo
             echo "Commit: $(git rev-parse --short=8 HEAD)"
           } > notes.md
+          # One release, always the newest. This is pre-release software and a
+          # row of stale tags - each with a set of cores nobody wants any more -
+          # helps no one, and a link handed to someone in an issue should keep
+          # pointing at something current rather than at whatever was newest the
+          # day it was posted. Re-publishing the same tag replaces it in place.
+          for old in $(gh release list --limit 50 --json tagName --jq '.[].tagName'); do
+            echo "removing previous release $old"
+            gh release delete "$old" --yes --cleanup-tag || true
+          done
+
           gh release create "${{ inputs.tag }}" artifacts/* \
             --target "$GITHUB_SHA" \
             --title "FlashEm ${{ inputs.tag }}" \
