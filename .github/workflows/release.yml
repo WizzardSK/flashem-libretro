@@ -50,6 +50,17 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install jpeg-turbo sdl2
 
+      # Homebrew keeps jpeg-turbo keg-only, so its headers are not on the
+      # default search path and the MJP decoder stops at jpeglib.h. The
+      # makefiles append to CFLAGS rather than setting it, so the environment
+      # is the way in; a command-line assignment would replace their flags.
+      - name: Point the compiler at Homebrew's jpeg (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          prefix=$(brew --prefix jpeg-turbo)
+          echo "CFLAGS=-I$prefix/include" >> "$GITHUB_ENV"
+          echo "LDFLAGS=-L$prefix/lib" >> "$GITHUB_ENV"
+
       - name: Build the libretro core
         run: make -f Makefile.libretro -j$(getconf _NPROCESSORS_ONLN)
 
