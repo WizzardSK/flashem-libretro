@@ -71,6 +71,14 @@ static void jit_mem_write32(VFlash *vf, uint32_t addr, uint32_t val) {
 /* ---- Block Cache ---- */
 
 JitContext *jit_create(VFlash *vf) {
+    /* The emitter writes x86-64 machine code. On any other host the blocks it
+     * produces are not instructions, so the first jit_run() would execute
+     * garbage - the interpreter carries the whole load there instead. */
+#if !defined(__x86_64__) && !defined(_M_X64)
+    (void)vf;
+    printf("[JIT] Disabled: no backend for this host, using the interpreter\n");
+    return NULL;
+#else
     JitContext *jit = calloc(1, sizeof(JitContext));
     if (!jit) return NULL;
 
@@ -90,6 +98,7 @@ JitContext *jit_create(VFlash *vf) {
            JIT_CACHE_SIZE / (1024*1024), JIT_MAX_BLOCKS);
     /* Stats logged periodically from jit_run */
     return jit;
+#endif
 }
 
 void jit_destroy(JitContext *jit) {

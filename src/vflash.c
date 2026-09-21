@@ -3624,7 +3624,7 @@ VFlash* vflash_create(const char *disc_path) {
      * (vflash_set_bios_dir — RetroArch's system directory), $FLASHEM_BIOS,
      * then beside the binary for a standalone run. */
     {
-        char sys_rom[1024], sys_sub[1024];
+        char sys_rom[1100], sys_sub[1100];
         const char *rom_paths[6];
         int n = 0;
 
