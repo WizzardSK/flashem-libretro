@@ -4,7 +4,7 @@ authors = "WizzardSK"
 supported_extensions = "cue|bin|iso"
 corename = "FlashEm"
 categories = "Emulator"
-license = "Unknown"
+license = "MIT"
 permissions = ""
 display_version = "0.1"
 

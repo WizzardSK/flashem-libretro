@@ -437,3 +437,8 @@ q          quit
 ./mjp_extract   game.iso frames/   # extract MJP video frames
 ./ptx_extract   game.iso images/   # extract PTX images
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE). `src/libretro.h` comes from the libretro project
+and keeps its own MIT notice.
