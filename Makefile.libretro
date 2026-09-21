@@ -39,7 +39,6 @@ SOURCES_C := \
 LIBS := -ljpeg -lm
 fpic :=
 SHARED :=
-LDFLAGS :=
 
 # The core is dlopened next to a frontend that has symbols of its own; without
 # this the dynamic linker can bind our calls to the frontend's copies.

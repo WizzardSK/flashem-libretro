@@ -1,6 +1,6 @@
 CC      = gcc
-CFLAGS  = -O2 -Wall -Wextra -Iinclude $(shell sdl2-config --cflags)
-LDFLAGS = $(shell sdl2-config --libs) -ljpeg -lm
+CFLAGS  += -O2 -Wall -Wextra -Iinclude $(shell sdl2-config --cflags)
+LDFLAGS += $(shell sdl2-config --libs) -ljpeg -lm
 
 SRCS = src/main.c src/vflash.c src/arm9.c src/cp15.c src/cdrom.c \
        src/mjp.c src/audio.c src/ptx.c src/ztimer.c src/disasm.c \
