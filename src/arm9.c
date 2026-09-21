@@ -891,8 +891,15 @@ static void wild_check(ARM9 *cpu, uint32_t addr, uint32_t insn)
         printf("[WILD] VA 0x1880 translates to %08X\n",
                vflash_translate(cpu->mem_ctx, 0x1880));
     }
-    for (uint32_t a = 0x1880; a <= 0x18B4; a += 4)
-        printf("[WILD] [%08X] = %08X\n", a, cpu->mem_read32(cpu->mem_ctx, a));
+    {
+        static const uint32_t watch[] = {
+            0x00000018, 0x00000038, 0x1000FF98, 0x1000FFB8,
+            0x10FFF200, 0x10FFF234, 0x10FFF24C, 0x10FFFA58
+        };
+        for (unsigned k = 0; k < sizeof(watch)/sizeof(watch[0]); k++)
+            printf("[WILD] [%08X] = %08X\n", watch[k],
+                   cpu->mem_read32(cpu->mem_ctx, watch[k]));
+    }
     printf("[WILD] last jump: %08X -> %08X\n", wild_jump_from, wild_jump_to);
     printf("[WILD] came from:");
     for (int k = 0; k < WILD_RING; k++) {

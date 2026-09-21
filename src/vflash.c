@@ -52,7 +52,14 @@ static int hle_service_intercept(void *ctx, uint32_t addr);
 /* HLE stub addresses — placed at TOP of RAM below stack, well away from
  * game code. load_raw() loads at VFLASH_RAM_BASE (0x10000000), so stubs
  * at 0x10000020 would get OVERWRITTEN. Use 0x10FFE000 instead (16MB-8KB). */
-#define HLE_STUB_BASE   0x10FFE000
+/* The exception stubs live in the ROM window (PA 0x0000-0x1FFF), which this
+ * core owns and a game only ever reads: they used to sit at 0x10FFE000, inside
+ * the 16 KB the RTOS puts its L1 page table in (TTB = 0x10FFC000), so the
+ * table's section descriptors overwrote them and the IRQ vector ended up
+ * branching into page tables. They are written through the SDRAM alias, before
+ * HLE boot takes its copy of the low window, and executed from the window. */
+#define HLE_STUB_BASE   0x10000800        /* where they are written */
+#define HLE_STUB_EXEC   0x00000800        /* where they run */
 #define HLE_STUB_SIZE   0x100       /* reserve 256 bytes for stubs */
 
 /* ---- I/O register model (ZEVIO 1020 SoC, estimated) ----
@@ -967,6 +974,20 @@ static uint32_t mem_read32(void *ctx, uint32_t addr) {
         return 1; /* status/flag byte */
     }
 
+    /* What the loop at 0x10A225xx is waiting for (VFLASH_WILD=1). */
+    if (__builtin_expect(addr >= 0x80000000u, 0) && wild_tracing()) {
+        uint32_t pc = vf->cpu.r[15];
+        if (pc >= 0x10A22400 && pc < 0x10A22800) {
+            static int mr;
+            static uint32_t last_addr;
+            if (mr < 20 && addr != last_addr) {
+                printf("[MMIOR] [%08X] read from PC=%08X\n", addr, pc);
+                last_addr = addr;
+                mr++;
+            }
+        }
+    }
+
     /* Fast path: RAM (most common — ~90% of all accesses) */
     if (__builtin_expect(addr >= VFLASH_RAM_BASE && addr < VFLASH_RAM_BASE + VFLASH_RAM_SIZE, 1)) {
         uint32_t roff = addr - VFLASH_RAM_BASE;
@@ -1664,6 +1685,20 @@ static void mem_write32(void *ctx, uint32_t addr, uint32_t val) {
     VFlash *vf = ctx;
     addr = mmu_translate(vf, addr);
 
+    /* What the RTOS timer code actually programs (VFLASH_WILD=1): it enables
+     * something our model never sees the period of. */
+    if (wild_tracing() && addr >= 0x80000000u) {
+        uint32_t pc = vf->cpu.r[15];
+        if ((pc >= 0x10A0E000 && pc < 0x10A0F000) ||
+            (pc >= 0x10A22000 && pc < 0x10A23000)) {
+            static int mw;
+            if (mw < 30) {
+                printf("[MMIOW] [%08X] = %08X from PC=%08X\n", addr, val, pc);
+                mw++;
+            }
+        }
+    }
+
     /* Who overwrites the HLE ROM stub (VFLASH_WILD=1). On hardware PA 0 is the
      * boot ROM and this write would not land. */
     if (__builtin_expect(addr >= 0x1880 && addr < 0x18B8, 0) && wild_tracing()) {
@@ -1821,7 +1856,16 @@ static void mem_write32(void *ctx, uint32_t addr, uint32_t val) {
                         vf->timer.irq.status &= ~val;
                         vf->timer.timer[0].irq_pending = 0;
                         break;
-                    case 0x2C: /* priority limit restore (EOI completion) */
+                    case 0x2C: /* EOI: the interrupt is done being serviced */
+                        /* The handler also writes the timer's own status
+                         * register, but that address is not what this model
+                         * keeps the pending bit in, so without this the bit
+                         * stayed set and the next slice delivered the same
+                         * interrupt again, forever. */
+                        vf->timer.irq.status &= ~1u;
+                        vf->timer.timer[0].irq_pending = 0;
+                        vf->soc_intc.status &= ~1u;
+                        vf->vic_irq.irq_active = 0;
                         break;
                 }
             }
@@ -2965,15 +3009,16 @@ static void install_vector_table(VFlash *vf) {
         ram_w32(vf, VFLASH_RAM_BASE + i * 4, ldr);
 
     /* Stub addresses — stubs sit at HLE_STUB_BASE */
-#define STUB(n) (HLE_STUB_BASE + (n) * 20)  /* 5 instructions each */
+#define STUB(n) (HLE_STUB_EXEC + (n) * 20)  /* 5 instructions each */
 #define IRQ_HANDLER_BASE (HLE_STUB_BASE + 7 * 20)  /* 44 bytes, past the grid */
+#define IRQ_HANDLER_EXEC (HLE_STUB_EXEC + 7 * 20)
     ram_w32(vf, VFLASH_RAM_BASE + 0x20, STUB(0));  /* reset  */
     ram_w32(vf, VFLASH_RAM_BASE + 0x24, STUB(1));  /* undef  */
     ram_w32(vf, VFLASH_RAM_BASE + 0x28, STUB(2));  /* swi    */
     ram_w32(vf, VFLASH_RAM_BASE + 0x2C, STUB(3));  /* pabt   */
     ram_w32(vf, VFLASH_RAM_BASE + 0x30, STUB(4));  /* dabt   */
     ram_w32(vf, VFLASH_RAM_BASE + 0x34, 0);
-    ram_w32(vf, VFLASH_RAM_BASE + 0x38, IRQ_HANDLER_BASE);  /* irq    */
+    ram_w32(vf, VFLASH_RAM_BASE + 0x38, IRQ_HANDLER_EXEC);  /* irq    */
     ram_w32(vf, VFLASH_RAM_BASE + 0x3C, STUB(6));  /* fiq    */
 #undef STUB
 
@@ -3068,7 +3113,7 @@ static void install_vector_table(VFlash *vf) {
     printf("[HLE]   0x00 RESET → 0x%08X\n", HLE_STUB_BASE + 0 * 20);
     printf("[HLE]   0x04 UNDEF → 0x%08X (fatal loop)\n", HLE_STUB_BASE + 1 * 20);
     printf("[HLE]   0x08 SWI   → 0x%08X\n", HLE_STUB_BASE + 2 * 20);
-    printf("[HLE]   0x18 IRQ   → 0x%08X\n", IRQ_HANDLER_BASE);
+    printf("[HLE]   0x18 IRQ   → 0x%08X\n", IRQ_HANDLER_EXEC);
     printf("[HLE]   0x1C FIQ   → 0x%08X\n", HLE_STUB_BASE + 6 * 20);
 }
 
@@ -3139,36 +3184,45 @@ static void install_rtos_irq_chain(VFlash *vf) {
      *   SUBS  PC, LR, #4            ; return from IRQ
      */
     {
-        uint32_t h = 0xFFF200;
+        /* Same trap as the stubs: 0x10FFF200 is inside the RTOS's L1 page
+         * table (TTB = 0x10FFC000, 16 KB), so in HLE mode this handler goes in
+         * the ROM window instead, which nothing else writes. */
+        const int hle_window = !vf->has_rom && vf->rom_remapped;
+        uint32_t h = hle_window ? 0x1200 : 0xFFF200;
         uint32_t p = h;
-        *(uint32_t*)(vf->ram + p) = 0xE92D500F; p += 4; /* +00: PUSH {R0-R3,R12,LR} */
-        *(uint32_t*)(vf->ram + p) = 0xE59F0030; p += 4; /* +04: LDR R0,[PC,#0x30]→pool0 */
-        *(uint32_t*)(vf->ram + p) = 0xE3A01001; p += 4; /* +08: MOV R1,#1 */
-        *(uint32_t*)(vf->ram + p) = 0xE5801000; p += 4; /* +0C: STR R1,[R0] timer clr */
-        *(uint32_t*)(vf->ram + p) = 0xE59F0028; p += 4; /* +10: LDR R0,[PC,#0x28]→pool1 */
-        *(uint32_t*)(vf->ram + p) = 0xE5801000; p += 4; /* +14: STR R1,[R0] intc clr */
-        *(uint32_t*)(vf->ram + p) = 0xE59F0024; p += 4; /* +18: LDR R0,[PC,#0x24]→pool2 */
-        *(uint32_t*)(vf->ram + p) = 0xE5902000; p += 4; /* +1C: LDR R2,[R0] vic ack */
-        *(uint32_t*)(vf->ram + p) = 0xE59F0020; p += 4; /* +20: LDR R0,[PC,#0x20]→pool3 */
-        *(uint32_t*)(vf->ram + p) = 0xE5903000; p += 4; /* +24: LDR R3,[R0] vic vector */
-        *(uint32_t*)(vf->ram + p) = 0xE59F001C; p += 4; /* +28: LDR R0,[PC,#0x1C]→pool4 */
-        *(uint32_t*)(vf->ram + p) = 0xE5803000; p += 4; /* +2C: STR R3,[R0] vic eoi */
-        *(uint32_t*)(vf->ram + p) = 0xE8BD500F; p += 4; /* +30: POP {R0-R3,R12,LR} */
-        *(uint32_t*)(vf->ram + p) = 0xE25EF004; p += 4; /* +34: SUBS PC,LR,#4 */
+        /* PA 0x1200 is served from low_ram once the window is switched, and
+         * that copy was taken at boot - so write the handler where it will be
+         * read from, not into the SDRAM alias underneath it. */
+        uint8_t *dst = hle_window ? vf->low_ram : vf->ram;
+        *(uint32_t*)(dst + p) = 0xE92D500F; p += 4; /* +00: PUSH {R0-R3,R12,LR} */
+        *(uint32_t*)(dst + p) = 0xE59F0030; p += 4; /* +04: LDR R0,[PC,#0x30]→pool0 */
+        *(uint32_t*)(dst + p) = 0xE3A01001; p += 4; /* +08: MOV R1,#1 */
+        *(uint32_t*)(dst + p) = 0xE5801000; p += 4; /* +0C: STR R1,[R0] timer clr */
+        *(uint32_t*)(dst + p) = 0xE59F0028; p += 4; /* +10: LDR R0,[PC,#0x28]→pool1 */
+        *(uint32_t*)(dst + p) = 0xE5801000; p += 4; /* +14: STR R1,[R0] intc clr */
+        *(uint32_t*)(dst + p) = 0xE59F0024; p += 4; /* +18: LDR R0,[PC,#0x24]→pool2 */
+        *(uint32_t*)(dst + p) = 0xE5902000; p += 4; /* +1C: LDR R2,[R0] vic ack */
+        *(uint32_t*)(dst + p) = 0xE59F0020; p += 4; /* +20: LDR R0,[PC,#0x20]→pool3 */
+        *(uint32_t*)(dst + p) = 0xE5903000; p += 4; /* +24: LDR R3,[R0] vic vector */
+        *(uint32_t*)(dst + p) = 0xE59F001C; p += 4; /* +28: LDR R0,[PC,#0x1C]→pool4 */
+        *(uint32_t*)(dst + p) = 0xE5803000; p += 4; /* +2C: STR R3,[R0] vic eoi */
+        *(uint32_t*)(dst + p) = 0xE8BD500F; p += 4; /* +30: POP {R0-R3,R12,LR} */
+        *(uint32_t*)(dst + p) = 0xE25EF004; p += 4; /* +34: SUBS PC,LR,#4 */
         /* Pool data — offsets calculated from each LDR's PC+8:
          * +04: PC+8=h+0C, +0x30=h+3C → pool0
          * +10: PC+8=h+18, +0x28=h+40 → pool1
          * +18: PC+8=h+20, +0x24=h+44 → pool2
          * +20: PC+8=h+28, +0x20=h+48 → pool3
          * +28: PC+8=h+30, +0x1C=h+4C → pool4 */
-        *(uint32_t*)(vf->ram + p) = 0;          p += 4; /* +38: padding */
-        *(uint32_t*)(vf->ram + p) = 0xB0000024; p += 4; /* +3C: pool0 timer0 status */
-        *(uint32_t*)(vf->ram + p) = 0xB0001020; p += 4; /* +40: pool1 SoC INTC clear */
-        *(uint32_t*)(vf->ram + p) = 0xDC000024; p += 4; /* +44: pool2 VIC ACK */
-        *(uint32_t*)(vf->ram + p) = 0xDC000028; p += 4; /* +48: pool3 VIC vector */
-        *(uint32_t*)(vf->ram + p) = 0xDC00002C; p += 4; /* +4C: pool4 VIC EOI */
+        *(uint32_t*)(dst + p) = 0;          p += 4; /* +38: padding */
+        *(uint32_t*)(dst + p) = 0xB0000024; p += 4; /* +3C: pool0 timer0 status */
+        *(uint32_t*)(dst + p) = 0xB0001020; p += 4; /* +40: pool1 SoC INTC clear */
+        *(uint32_t*)(dst + p) = 0xDC000024; p += 4; /* +44: pool2 VIC ACK */
+        *(uint32_t*)(dst + p) = 0xDC000028; p += 4; /* +48: pool3 VIC vector */
+        *(uint32_t*)(dst + p) = 0xDC00002C; p += 4; /* +4C: pool4 VIC EOI */
     }
-    *(uint32_t*)(vf->ram + 0xFFB8) = 0x10FFF200;
+    *(uint32_t*)(vf->ram + 0xFFB8) =
+        (!vf->has_rom && vf->rom_remapped) ? 0x00001200u : 0x10FFF200u;
 
     printf("[RTOS-VEC] IRQ chain: SDRAM[0xFF98]→SDRAM[0xFFB8]=0x10FFF200 (HLE IRQ handler)\n");
 }
@@ -3933,6 +3987,16 @@ static int hle_service_intercept(void *ctx, uint32_t addr) {
             cpu->r[13] = 0x11000000;
             cpu->r[15] = warm_entry;
             vf->misc_regs[0x0C >> 2] |= 0x02;  /* warm boot flag, as the ROM sets */
+
+            /* EXPERIMENT: the RTOS is in SDRAM and restarting, which is the
+             * moment the ROM path calls "kernel detected". */
+            if (vf->boot_phase < 300) {
+                vf->boot_phase = 300;
+                install_rtos_irq_chain(vf);
+                vf->soc_intc.status |= (0x01 << 8);
+                vf->cpu.cpsr &= ~0xC0;
+                printf("[HLE] Kernel is up - IRQ chain installed, boot_phase=300\n");
+            }
             printf("[HLE] Warm reboot → BOOT.BIN entry 0x%08X\n", warm_entry);
             return 1;
         }
