@@ -102,29 +102,50 @@ jobs:
           make -f Makefile.libretro platform=win -j$(nproc)
           make -j$(nproc) flashem.exe || echo "standalone build failed - core still published"
 
-      # A core that is missing an entry point loads and then does nothing
-      # useful, which is a confusing thing to hand someone.
+      # A core missing an entry point loads and then does nothing useful, which
+      # is a confusing thing to hand someone. Split per platform: the question
+      # has a different answer on PE than on ELF or Mach-O, and the Windows
+      # steps need the msys2 shell.
       - name: Check the core exports what a frontend calls
-        shell: ${{ runner.os == 'Windows' && 'msys2 {0}' || 'bash' }}
+        if: runner.os != 'Windows'
         run: |
           set -e
           test -f "${{ matrix.core }}"
-          case "$RUNNER_OS" in
-            macOS)   count=$(nm -gU "${{ matrix.core }}" | grep -c " T _retro_" || true) ;;
-            Windows) count=$(objdump -p "${{ matrix.core }}" | grep -cE "^\s+\[ *[0-9]+\].*retro_" || true) ;;
-            *)       count=$(nm -D --defined-only "${{ matrix.core }}" | grep -c " T retro_" || true) ;;
-          esac
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            count=$(nm -gU "${{ matrix.core }}" | grep -c " T _retro_" || true)
+          else
+            count=$(nm -D --defined-only "${{ matrix.core }}" | grep -c " T retro_" || true)
+          fi
+          echo "retro_* entry points: $count"
+          [ "$count" -ge 25 ]
+
+      - name: Check the core exports what a frontend calls (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          set -e
+          test -f "${{ matrix.core }}"
+          count=$(objdump -p "${{ matrix.core }}" | grep -c "retro_" || true)
           echo "retro_* entry points: $count"
           [ "$count" -ge 25 ]
 
       - name: Stage
-        shell: ${{ runner.os == 'Windows' && 'msys2 {0}' || 'bash' }}
+        if: runner.os != 'Windows'
         run: |
           mkdir -p dist
           cp "${{ matrix.core }}" "dist/flashem_libretro_${{ matrix.name }}.${{ matrix.ext }}"
           cp flashem_libretro.info dist/ 2>/dev/null || true
           if [ -f flashem ]; then cp flashem "dist/flashem_${{ matrix.name }}"; fi
+
+      - name: Stage (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          mkdir -p dist
+          cp "${{ matrix.core }}" "dist/flashem_libretro_${{ matrix.name }}.${{ matrix.ext }}"
+          cp flashem_libretro.info dist/ 2>/dev/null || true
           if [ -f flashem.exe ]; then cp flashem.exe "dist/flashem_${{ matrix.name }}.exe"; fi
+
 
       - uses: actions/upload-artifact@main
         with:
