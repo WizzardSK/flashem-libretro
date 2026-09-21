@@ -100,7 +100,10 @@ jobs:
         run: |
           export LDFLAGS="-static"
           make -f Makefile.libretro platform=win -j$(nproc)
-          make -j$(nproc) flashem.exe || echo "standalone build failed - core still published"
+          # The target is flashem, not flashem.exe: make has no implicit rule
+          # for the suffix, while MinGW's gcc appends it to the output by
+          # itself. Asking for flashem.exe is how v0.1 went out without one.
+          make -j$(nproc) flashem || echo "standalone build failed - core still published"
 
       # A core missing an entry point loads and then does nothing useful, which
       # is a confusing thing to hand someone. Split per platform: the question
