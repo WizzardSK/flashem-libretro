@@ -206,6 +206,10 @@ struct VFlash {
     int       debug;
     int       has_rom;    /* 1 if boot ROM loaded (real boot, no HLE) */
     uint32_t  flash_remap; /* Flash controller: remap base written to reg 0x800 */
+    uint32_t  fc_ctrl[64]; /* 0xB8000000-0xB80000FF control registers (HLE mode).
+                            * With a boot ROM this window is the ROM itself; with
+                            * HLE boot there is no ROM behind it and the RTOS uses
+                            * the low registers as ordinary read/write bits. */
     uint8_t   flash_buf[0x2000]; /* Flash controller write buffer (captures writes to 0xB8000800+) */
     int       flash_buf_dirty;   /* 1 if flash_buf has been written to */
     int       flash_preloaded;   /* 1 after ROM preload done (don't overwrite flash_buf[0]) */
@@ -1289,6 +1293,13 @@ static uint32_t mem_read32(void *ctx, uint32_t addr) {
 
         /* (ZEVIO VIC reads handled above in primary 0xDC000000 block) */
 
+        /* Control registers of the same block, when no ROM is behind it. The
+         * RTOS sets bits here and then spins until it reads them back - see the
+         * routine at 0x10A22574, which ORs a mask into 0xB8000004 and loops on
+         * "AND mask == 0". With nothing storing the write it waited forever. */
+        if (off >= 0x38000000u && off < 0x38000100u && !vf->has_rom)
+            return vf->fc_ctrl[(off - 0x38000000u) >> 2];
+
         /* NOR Flash controller at 0xB8000000 (2MB). */
         if (off >= 0x38000000u && off < 0x38200000u && vf->has_rom) {
             uint32_t foff = off - 0x38000000u;
@@ -2103,6 +2114,11 @@ static void mem_write32(void *ctx, uint32_t addr, uint32_t val) {
                 case 0x0C: vf->dma_param_c = val; break;
                 case 0x10: break;  /* config */
             }
+            return;
+        }
+
+        if (off >= 0x38000000u && off < 0x38000100u && !vf->has_rom) {
+            vf->fc_ctrl[(off - 0x38000000u) >> 2] = val;
             return;
         }
 
@@ -3919,7 +3935,7 @@ static int hle_service_intercept(void *ctx, uint32_t addr) {
         static int dumped;
         if (!dumped) {
             dumped = 1;
-            for (uint32_t a = 0x10A111E0; a <= 0x10A11228; a += 4) {
+            for (uint32_t a = 0x10A22580; a <= 0x10A22630; a += 4) {
                 uint32_t insn = *(uint32_t*)(vf->ram + (a - 0x10000000));
                 char buf[128];
                 arm_disasm(a, insn, buf, sizeof(buf));
