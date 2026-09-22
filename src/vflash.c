@@ -1696,8 +1696,20 @@ static void mem_write32(void *ctx, uint32_t addr, uint32_t val) {
     VFlash *vf = ctx;
     addr = mmu_translate(vf, addr);
 
-    /* What the RTOS timer code actually programs (VFLASH_WILD=1): it enables
-     * something our model never sees the period of. */
+    /* Every write into the ZEVIO timer block, whoever makes it (VFLASH_WILD=1).
+     * The scheduler has no tick and the machine sits in its idle task, so the
+     * question is whether the RTOS programs this timer at all and with what. */
+    if (wild_tracing() &&
+        ((addr >= 0xB0000000u && addr < 0xB0002000u) ||
+         (addr >= 0xDC000000u && addr < 0xDC001000u) ||
+         (addr >= 0xB8000000u && addr < 0xB8000100u))) {
+        static int tb;
+        if (tb < 60) {
+            printf("[IRQW] [%08X] = %08X from PC=%08X\n", addr, val, vf->cpu.r[15]);
+            tb++;
+        }
+    }
+
     if (wild_tracing() && addr >= 0x80000000u) {
         uint32_t pc = vf->cpu.r[15];
         if ((pc >= 0x10A0E000 && pc < 0x10A0F000) ||
@@ -3935,7 +3947,7 @@ static int hle_service_intercept(void *ctx, uint32_t addr) {
         static int dumped;
         if (!dumped) {
             dumped = 1;
-            for (uint32_t a = 0x10A22580; a <= 0x10A22630; a += 4) {
+            for (uint32_t a = 0x10A226D0; a <= 0x10A22710; a += 4) {
                 uint32_t insn = *(uint32_t*)(vf->ram + (a - 0x10000000));
                 char buf[128];
                 arm_disasm(a, insn, buf, sizeof(buf));
@@ -4003,6 +4015,19 @@ static int hle_service_intercept(void *ctx, uint32_t addr) {
             cpu->r[13] = 0x11000000;
             cpu->r[15] = warm_entry;
             vf->misc_regs[0x0C >> 2] |= 0x02;  /* warm boot flag, as the ROM sets */
+
+            /* The RTOS is in SDRAM and restarting, which is where the ROM-boot
+             * path calls the kernel detected. It takes over the vectors at PA 0
+             * on its way through, and the chain they point at ends in a word
+             * nobody fills unless this runs - which is why the machine parked on
+             * the IRQ vector with the tick running and nothing to service it. */
+            if (vf->boot_phase < 300) {
+                vf->boot_phase = 300;
+                install_rtos_irq_chain(vf);
+                vf->soc_intc.status |= (0x01 << 8);   /* enable the timer source */
+                vf->cpu.cpsr &= ~0xC0;                /* unmask IRQ and FIQ */
+                printf("[HLE] Kernel is up - IRQ chain installed, boot_phase=300\n");
+            }
 
             /* EXPERIMENT: the RTOS is in SDRAM and restarting, which is the
              * moment the ROM path calls "kernel detected". */
@@ -5297,6 +5322,21 @@ void vflash_run_frame(VFlash *vf) {
         printf("[FRAME-START] frame=%lu PC=%08X bp=%d\n",
                (unsigned long)vf->frame_count, vf->cpu.r[15], vf->boot_phase);
 
+    /* Where the IRQ vector chain actually leads when the machine parks on it. */
+    if (wild_tracing() && vf->cpu.r[15] == 0x18) {
+        static int parked;
+        if (parked < 3) {
+            parked++;
+            printf("[VECDUMP] low[0x18]=%08X low[0x38]=%08X SDRAM[0xFF98]=%08X SDRAM[0xFFB8]=%08X\n",
+                   *(uint32_t*)(vf->low_ram + 0x18), *(uint32_t*)(vf->low_ram + 0x38),
+                   *(uint32_t*)(vf->ram + 0xFF98), *(uint32_t*)(vf->ram + 0xFFB8));
+            uint32_t tgt = *(uint32_t*)(vf->ram + 0xFFB8);
+            for (int k = 0; k < 6; k++)
+                printf("[VECDUMP]   [%08X] = %08X\n", tgt + k * 4,
+                       vf->cpu.mem_read32(vf, tgt + k * 4));
+        }
+    }
+
     /* Watch the HLE ROM stub for as long as it matters (VFLASH_WILD=1): it is
      * ordinary SDRAM here, so anything that fills low memory - including the
      * HLE memcpy/memset paths, which never go through mem_write32 - can take
@@ -5316,9 +5356,14 @@ void vflash_run_frame(VFlash *vf) {
 
     /* Re-enable timer at frame start if it was disabled.
      * µMORE services may disable the timer; re-enable for IRQ delivery. */
-    if (vf->has_rom &&
-        (vf->timer.timer[0].ctrl & 0x80) == 0 && /* not enabled */
-        vf->boot_phase >= 300) { /* only after game launch */
+    /* The RTOS programs no timer this model has - it wrote ours off and never
+     * touched the ZEVIO timer block, so the only writes there are our own IRQ
+     * handler's. Whatever it does use for a tick, we do not emulate it, and
+     * without one the scheduler runs its idle task forever. So in HLE mode the
+     * stub's timer is kept alive: it is our invention standing in for the boot
+     * ROM's, and nothing else is going to drive the scheduler. */
+    if ((vf->has_rom ? vf->boot_phase >= 300 : 1) &&
+        (vf->timer.timer[0].ctrl & 0x80) == 0) { /* not enabled */
         if (vf->timer.timer[0].load == 0)
             vf->timer.timer[0].load = 37500; /* 150MHz / 37500 = 4KHz */
         vf->timer.timer[0].ctrl = 0xE2; /* enabled, periodic, 32-bit, IRQ */
@@ -5362,6 +5407,41 @@ void vflash_run_frame(VFlash *vf) {
             arm9_run(&vf->cpu, slice);
         }
         uint32_t actual = (uint32_t)(vf->cpu.cycles - cyc_before);
+
+        if (wild_tracing()) {
+            /* Where the machine spends its slices: the vectors, the RTOS, the
+             * game's own code, or somewhere else. A PC caught at a frame
+             * boundary says nothing on its own. */
+            static unsigned hist[4], hist_samples;
+            uint32_t pc_now = vf->cpu.r[15];
+            if (pc_now < 0x2000) hist[0]++;
+            else if (pc_now >= 0x10900000 && pc_now < 0x10C00000) hist[1]++;
+            else if (pc_now >= 0x10C00000) hist[2]++;
+            else hist[3]++;
+            /* And the addresses themselves, so the loop can be disassembled:
+             * a tiny table of the PCs seen most often. */
+            static uint32_t hot_pc[12]; static unsigned hot_n[12];
+            {
+                int slot = -1, worst = 0;
+                for (int k = 0; k < 12; k++) {
+                    if (hot_pc[k] == pc_now) { slot = k; break; }
+                    if (hot_n[k] < hot_n[worst]) worst = k;
+                }
+                if (slot < 0) { slot = worst; hot_pc[slot] = pc_now; hot_n[slot] = 0; }
+                hot_n[slot]++;
+            }
+
+            if (++hist_samples >= 2000) {
+                printf("[WHERE] slices: vectors %u, RTOS %u, BOOT.BIN %u, elsewhere %u\n",
+                       hist[0], hist[1], hist[2], hist[3]);
+                for (int k = 0; k < 12; k++)
+                    if (hot_n[k] > 40)
+                        printf("[WHERE]   %08X seen %u\n", hot_pc[k], hot_n[k]);
+                for (int k = 0; k < 12; k++) { hot_pc[k] = 0; hot_n[k] = 0; }
+                hist[0] = hist[1] = hist[2] = hist[3] = 0;
+                hist_samples = 0;
+            }
+        }
 
         /* Trace boot flow: log when PC enters key regions */
         {

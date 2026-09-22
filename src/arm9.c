@@ -880,8 +880,12 @@ static void wild_check(ARM9 *cpu, uint32_t addr, uint32_t insn)
         }
     }
     /* Executing the µMORE task table is not "out of range" by address, but it
-     * is just as wrong, so it counts as landing off the rails. */
+     * is just as wrong, so it counts as landing off the rails - and so is the
+     * RTOS halt loop at 0x109D4BBC, which counts to 254 and starts again
+     * forever: reaching it means a check failed somewhere, and the ring says
+     * where it was called from. */
     if (!(addr >= 0x10B0DF00 && addr < 0x10B0E000) &&
+        !(addr >= 0x109D4BBC && addr <= 0x109D4BCC) &&
         (addr < 0x2000 || (addr >= 0x10000000 && addr < 0x11000000)))
         return;
     printf("[WILD] PC=%08X insn=%08X LR=%08X SP=%08X CPSR=%08X\n",
