@@ -949,9 +949,42 @@ static uint32_t mmu_translate(VFlash *vf, uint32_t va) {
     return va;
 }
 
+
+/* Which MMIO pages the machine touches, and how often (VFLASH_WILD=1): a
+ * table of 4 KB pages above 0x80000000 with read and write counts, printed
+ * with the [WHERE] histogram. It answers what hardware the RTOS actually
+ * talks to, which matters when a device it waits on is not emulated. */
+#define MMIO_HIST_N 64
+static struct { uint32_t page; uint32_t reads, writes; uint32_t last_addr, last_val; } mmio_hist[MMIO_HIST_N];
+static void mmio_hist_note(uint32_t addr, int is_write, uint32_t val) {
+    uint32_t page = addr & ~0xFFFu;
+    int free_slot = -1;
+    for (int k = 0; k < MMIO_HIST_N; k++) {
+        if (mmio_hist[k].page == page && (mmio_hist[k].reads || mmio_hist[k].writes)) {
+            if (is_write) { mmio_hist[k].writes++; mmio_hist[k].last_addr = addr; mmio_hist[k].last_val = val; }
+            else mmio_hist[k].reads++;
+            return;
+        }
+        if (free_slot < 0 && !mmio_hist[k].reads && !mmio_hist[k].writes) free_slot = k;
+    }
+    if (free_slot >= 0) {
+        mmio_hist[free_slot].page = page;
+        if (is_write) { mmio_hist[free_slot].writes = 1; mmio_hist[free_slot].last_addr = addr; mmio_hist[free_slot].last_val = val; }
+        else mmio_hist[free_slot].reads = 1;
+    }
+}
+static void mmio_hist_print(void) {
+    for (int k = 0; k < MMIO_HIST_N; k++)
+        if (mmio_hist[k].reads || mmio_hist[k].writes)
+            printf("[MMIO] page %08X: reads %u writes %u (last write %08X=%08X)\n",
+                   mmio_hist[k].page, mmio_hist[k].reads, mmio_hist[k].writes,
+                   mmio_hist[k].last_addr, mmio_hist[k].last_val);
+}
+
 static uint32_t mem_read32(void *ctx, uint32_t addr) {
     VFlash *vf = ctx;
     addr = mmu_translate(vf, addr);
+    if (addr >= 0x80000000u && wild_tracing()) mmio_hist_note(addr, 0, 0);
     /* NULL pointer dereference trap: when game reads [0x00-0x1F]
      * during gameplay, it's accessing a NULL entity pointer.
      * Return dummy vtable ptr for [0x00] so virtual calls go to stubs.
@@ -1695,6 +1728,19 @@ static int wild_tracing(void) {
 static void mem_write32(void *ctx, uint32_t addr, uint32_t val) {
     VFlash *vf = ctx;
     addr = mmu_translate(vf, addr);
+    if (addr >= 0x80000000u && wild_tracing()) mmio_hist_note(addr, 1, val);
+    /* The writes themselves, with the PC, for the timer and power blocks the
+     * RTOS programs (VFLASH_WILD=1, first 300). */
+    if (wild_tracing()) {
+        uint32_t pg = addr & 0xFFFF0000u;
+        static int tw;
+        if ((pg == 0x900C0000u || pg == 0x900D0000u || pg == 0x900B0000u ||
+             pg == 0x90010000u || pg == 0x90080000u || pg == 0x90030000u || pg == 0x900A0000u ||
+             (pg == 0xDC000000u && (addr & 0xFFF) != 0x2C && (addr & 0xFFF) != 0x28)) && tw < 300) {
+            tw++;
+            printf("[HWW] %08X <- %08X  pc=%08X\n", addr, val, vf->cpu.r[15]);
+        }
+    }
 
     /* Every write into the ZEVIO timer block, whoever makes it (VFLASH_WILD=1).
      * The scheduler has no tick and the machine sits in its idle task, so the
@@ -5408,6 +5454,38 @@ void vflash_run_frame(VFlash *vf) {
         }
         uint32_t actual = (uint32_t)(vf->cpu.cycles - cyc_before);
 
+        /* A copy of RAM at a chosen frame, for working out offline what the
+         * RTOS is doing: VFLASH_RAMDUMP names the file, VFLASH_RAMDUMP_FRAME
+         * the frame (default 600). The CPU registers go in a text file next
+         * to it. Off unless asked for. */
+        {
+            static int dumped;
+            const char *dump_path = getenv("VFLASH_RAMDUMP");
+            if (dump_path && !dumped) {
+                const char *fr = getenv("VFLASH_RAMDUMP_FRAME");
+                uint64_t at = fr ? strtoull(fr, NULL, 0) : 600;
+                if (vf->frame_count >= at) {
+                    FILE *df = fopen(dump_path, "wb");
+                    dumped = 1;
+                    if (df) {
+                        char regs_path[1024];
+                        fwrite(vf->ram, 1, VFLASH_RAM_SIZE, df);
+                        fclose(df);
+                        snprintf(regs_path, sizeof(regs_path), "%s.regs", dump_path);
+                        if ((df = fopen(regs_path, "w"))) {
+                            for (int k = 0; k < 16; k++)
+                                fprintf(df, "r%d=%08X\n", k, vf->cpu.r[k]);
+                            fprintf(df, "cpsr=%08X\nframe=%llu\n", vf->cpu.cpsr,
+                                    (unsigned long long)vf->frame_count);
+                            fclose(df);
+                        }
+                        printf("[RAMDUMP] %u bytes at frame %llu to %s\n", (unsigned)VFLASH_RAM_SIZE,
+                               (unsigned long long)vf->frame_count, dump_path);
+                    }
+                }
+            }
+        }
+
         if (wild_tracing()) {
             /* Where the machine spends its slices: the vectors, the RTOS, the
              * game's own code, or somewhere else. A PC caught at a frame
@@ -5432,6 +5510,7 @@ void vflash_run_frame(VFlash *vf) {
             }
 
             if (++hist_samples >= 2000) {
+                { static int mmio_rounds; if (++mmio_rounds % 10 == 1) mmio_hist_print(); }
                 printf("[WHERE] slices: vectors %u, RTOS %u, BOOT.BIN %u, elsewhere %u\n",
                        hist[0], hist[1], hist[2], hist[3]);
                 for (int k = 0; k < 12; k++)
