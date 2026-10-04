@@ -4,17 +4,22 @@
 #include "frame_pacer.h"
 #include <SDL2/SDL.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static void print_usage(const char *prog) {
     fprintf(stderr,
         "FlashEm - V.Flash emulator\n"
-        "Usage: %s [options] <disc.iso>\n\n"
+        "Usage: %s [options] <disc.cue>\n"
+        "       %s [options] --load <program> [<disc.cue>]\n\n"
         "Options:\n"
         "  --dbg        Start interactive debugger (paused at boot)\n"
         "  --dbg-run    Start interactive debugger (running)\n"
         "  --headless   Run without display\n"
         "  --scale N    Window scale factor (default: 2)\n"
+        "  --load F[@A] Load a program and start it instead of the boot ROM: an ELF,\n"
+        "               a BOOT.BIN, or a raw binary at address A (hex)\n"
+        "  --entry A    Start the loaded program at address A (hex) instead\n"
         "  --help       Show this help\n\n"
         "Controls:\n"
         "  Arrow keys   D-Pad\n"
@@ -37,7 +42,7 @@ static void print_usage(const char *prog) {
         "  bt           stack dump\n"
         "  setreg r0=1  write register\n"
         "  q            quit\n",
-        prog);
+        prog, prog);
 }
 
 /* Line-buffer a log stream. The Windows C runtime treats _IOLBF as full
@@ -57,6 +62,8 @@ int main(int argc, char **argv) {
     int headless = 0;
     int scale    = 2;
     int dbg_mode = 0;  /* 0=off, 1=paused at boot, 2=running with debugger */
+    const char *program = NULL;
+    uint32_t load_addr = VFLASH_ADDR_NONE, entry = VFLASH_ADDR_NONE;
 
     /* Parse arguments */
     for (int i = 1; i < argc; i++) {
@@ -69,10 +76,19 @@ int main(int argc, char **argv) {
             scale = atoi(argv[++i]);
             if (scale < 1 || scale > 4) scale = 2;
         }
+        else if (strcmp(argv[i], "--load") == 0 && i+1 < argc) {
+            static char path[1024];
+            snprintf(path, sizeof(path), "%s", argv[++i]);
+            char *at = strrchr(path, '@');
+            if (at) { *at = '\0'; load_addr = (uint32_t)strtoul(at + 1, NULL, 16); }
+            program = path;
+        }
+        else if (strcmp(argv[i], "--entry") == 0 && i+1 < argc)
+            entry = (uint32_t)strtoul(argv[++i], NULL, 16);
         else if (argv[i][0] != '-') disc_path = argv[i];
     }
 
-    if (!disc_path) {
+    if (!disc_path && !program) {
         print_usage(argv[0]);
         return 1;
     }
@@ -80,6 +96,10 @@ int main(int argc, char **argv) {
     /* Create emulator */
     VFlash *vf = vflash_create(disc_path);
     if (!vf) return 1;
+    if (program && !vflash_load_program(vf, program, load_addr, entry)) {
+        vflash_destroy(vf);
+        return 1;
+    }
 
     if (debug) vflash_set_debug(vf, 1);
 

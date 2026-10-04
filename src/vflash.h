@@ -37,6 +37,20 @@ typedef struct VFlash VFlash;
 void      vflash_set_bios_dir(const char *dir);
 /* NULL if the boot ROM cannot be found or the disc image cannot be opened. */
 VFlash   *vflash_create(const char *disc_path);
+/* Loads a program into RAM and starts the CPU at its entry point instead of the
+ * boot ROM's reset vector: a cold start, as at power-on - SVC mode, IRQ and
+ * FIQ masked, MMU and caches off, the stacks where the ROM puts them -
+ * with nothing else the ROM would have set up.
+ * Call it right after vflash_create(), before the first frame.
+ * - ELF (32-bit ARM): each PT_LOAD segment at its physical address, the rest
+ *   of its memory size zeroed; the entry is e_entry.
+ * - BOOT.BIN (starts with "BOOT"): the whole file at the load address in its
+ *   header, entered at +0x10 (the "ldr pc" the boot ROM jumps to).
+ * - Anything else: the raw file at load_addr.
+ * load_addr / entry override the file's own when not VFLASH_ADDR_NONE (entry
+ * defaults to the load address for a raw file). Returns 1 on success. */
+#define VFLASH_ADDR_NONE 0xFFFFFFFFu
+int       vflash_load_program(VFlash *vf, const char *path, uint32_t load_addr, uint32_t entry);
 void      vflash_destroy(VFlash *vf);
 void      vflash_run_frame(VFlash *vf);
 /* 1 while the ROM is still starting a disc's game (see hw_booting) and fast

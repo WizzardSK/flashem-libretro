@@ -93,6 +93,84 @@ VFlash *vflash_create(const char *disc_path) {
     return vf;
 }
 
+static uint32_t rd32le(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
+static uint16_t rd16le(const uint8_t *p) { return (uint16_t)(p[0] | p[1] << 8); }
+
+int vflash_load_program(VFlash *vf, const char *path, uint32_t load_addr, uint32_t entry) {
+    FILE *f = fopen(path, "rb");
+    if (!f) { fprintf(stderr, "[VFlash] Cannot open program: %s\n", path); return 0; }
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    uint8_t *data = size > 0 ? malloc((size_t)size) : NULL;
+    if (!data || fread(data, 1, (size_t)size, f) != (size_t)size) {
+        fprintf(stderr, "[VFlash] Cannot read program: %s\n", path);
+        free(data); fclose(f); return 0;
+    }
+    fclose(f);
+
+    int ok = 1;
+    uint32_t start;
+    if (size >= 52 && !memcmp(data, "\x7F" "ELF", 4)) {
+        /* 32-bit (1), little-endian (1), ARM (40) */
+        if (data[4] != 1 || data[5] != 1 || rd16le(data + 18) != 40) {
+            fprintf(stderr, "[VFlash] %s is not a 32-bit little-endian ARM ELF\n", path);
+            free(data); return 0;
+        }
+        uint32_t phoff = rd32le(data + 28);
+        uint16_t phentsize = rd16le(data + 42), phnum = rd16le(data + 44);
+        start = rd32le(data + 24);
+        for (uint16_t i = 0; ok && i < phnum; i++) {
+            const uint8_t *ph = data + phoff + (uint32_t)i * phentsize;
+            if (ph + 32 > data + size || rd32le(ph) != 1)   /* PT_LOAD */
+                continue;
+            uint32_t off = rd32le(ph + 4), paddr = rd32le(ph + 12);
+            uint32_t filesz = rd32le(ph + 16), memsz = rd32le(ph + 20);
+            if ((uint64_t)off + filesz > (uint64_t)size || filesz > memsz) { ok = 0; break; }
+            uint8_t *seg = calloc(1, memsz ? memsz : 1);
+            memcpy(seg, data + off, filesz);
+            ok = hw_load_phys(vf->hw, paddr, seg, memsz);
+            if (!ok) fprintf(stderr, "[VFlash] ELF segment 0x%08X+0x%X is outside RAM\n", paddr, memsz);
+            else fprintf(stderr, "[VFlash] Loaded segment 0x%08X (%u bytes, %u in file)\n", paddr, memsz, filesz);
+            free(seg);
+        }
+    } else if (size >= 0x14 && !memcmp(data, "BOOT", 4)) {
+        uint32_t base = load_addr != VFLASH_ADDR_NONE ? load_addr : rd32le(data + 8);
+        ok = hw_load_phys(vf->hw, base, data, (uint32_t)size);
+        start = base + 0x10;
+        if (ok) fprintf(stderr, "[VFlash] Loaded BOOT.BIN at 0x%08X (%ld bytes)\n", base, size);
+    } else {
+        if (load_addr == VFLASH_ADDR_NONE) {
+            fprintf(stderr, "[VFlash] %s is a raw binary: give it a load address\n", path);
+            free(data); return 0;
+        }
+        ok = hw_load_phys(vf->hw, load_addr, data, (uint32_t)size);
+        start = load_addr;
+        if (ok) fprintf(stderr, "[VFlash] Loaded %s at 0x%08X (%ld bytes)\n", path, load_addr, size);
+    }
+    free(data);
+    if (!ok) { fprintf(stderr, "[VFlash] %s does not fit in RAM (0x10000000, 16 MB)\n", path); return 0; }
+
+    if (entry != VFLASH_ADDR_NONE) start = entry;
+    /* The power-on state arm9_reset leaves, only at the entry instead of 0;
+     * bit 0 of the address selects Thumb, as for a BX. */
+    vf->cpu.r[15] = start & ~1u;
+    /* The stacks the boot ROM gives each mode (its code at 0x22C). Programs
+     * set up their own SVC stack, but their interrupt handlers run on the
+     * IRQ/FIQ ones the ROM left, and with those at 0 the first push of a
+     * handler went to 0xFFFFFFxx. A user-mode stack the
+     * ROM reads from memory; this one sits below the IRQ stack. */
+    vf->cpu.r13_irq = 0x107FB000u;
+    vf->cpu.r13_fiq = 0x107FC000u;
+    vf->cpu.r13_und = 0x107FD000u;
+    vf->cpu.r13_abt = 0x107FE000u;
+    vf->cpu.r13_usr = 0x107FA000u;
+    vf->cpu.r[13] = 0x10800000u;
+    vf->cpu.cpsr = ARM9_MODE_SVC | ARM9_FLAG_I | ARM9_FLAG_F | ((start & 1u) ? ARM9_FLAG_T : 0);
+    fprintf(stderr, "[VFlash] Starting at 0x%08X%s\n", start & ~1u, (start & 1u) ? " (Thumb)" : "");
+    return 1;
+}
+
 void vflash_destroy(VFlash *vf) {
     if (!vf) return;
     hw_destroy(vf->hw);

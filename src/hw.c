@@ -1577,6 +1577,13 @@ static const uint8_t *ram_at(HW *hw, uint32_t pa, uint32_t len) {
 
 void hw_screen_size(HW *hw, int *w, int *h) { *w = hw->scr_w; *h = hw->scr_h; }
 
+int hw_load_phys(HW *hw, uint32_t pa, const uint8_t *data, uint32_t len) {
+    uint8_t *dst = (uint8_t *)ram_at(hw, pa, len);
+    if (!dst) return 0;
+    memcpy(dst, data, len);
+    return 1;
+}
+
 /* The ROM is still getting a disc's game going: from power-on until the game
  * kernel starts using the graphics engine (Dingo Rallye: frame ~790; the
  * ROM runs one list while it sets the engine up, a game dozens a second), capped

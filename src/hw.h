@@ -20,6 +20,9 @@ void     hw_set_audio_sink(HW *hw, void *ctx,
 void     hw_run_frame(HW *hw);
 void     hw_screen_size(HW *hw, int *w, int *h);
 int      hw_booting(HW *hw);
+/* Copies data into SDRAM at a physical address (program loading, before the
+ * CPU runs); 0 if it does not fit in the 16 MB at 0x10000000. */
+int      hw_load_phys(HW *hw, uint32_t pa, const uint8_t *data, uint32_t len);
 
 /* One instruction, with interrupts and timers; returns cycles taken. */
 int      hw_step(HW *hw);
