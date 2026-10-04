@@ -66,7 +66,7 @@ struct HW {
     struct { struct { uint16_t ticks, start, value, divider, control; } t[2];
              uint16_t compl[6]; uint8_t int_mask, int_status; } tp[3];
 
-    struct { uint32_t clocks_load, wake_mask, disable, disable2, clocks, done; } pmu;
+    struct { uint32_t clocks_load, wake_mask, disable, disable2, clocks, done; uint64_t done_at; } pmu;
     uint32_t       boot_status;   /* 0x900A000C: 0 = cold boot */
     time_t         rtc_offset;
     time_t         rtc_boot;      /* RTC seconds at power-on (VFLASH_RTC, else host time) */
@@ -506,7 +506,12 @@ static uint32_t pmu_read(HW *hw, uint32_t pa) {
     case 0x04: return hw->pmu.wake_mask;
     case 0x08: return 0x2000;
     case 0x0C: return 0;
-    case 0x14: return hw->pmu.done;
+    case 0x14:
+        if (hw->pmu.done_at && hw->cpu->cycles >= hw->pmu.done_at) {
+            hw->pmu.done |= 1;
+            hw->pmu.done_at = 0;
+        }
+        return hw->pmu.done;
     case 0x18: return hw->pmu.disable;
     case 0x20: return hw->pmu.disable2;
     case 0x24: return hw->pmu.clocks;
@@ -521,12 +526,17 @@ static void pmu_write(HW *hw, uint32_t pa, uint32_t v) {
     case 0x00: hw->pmu.clocks_load = v; return;
     case 0x04:
         /* The V.Flash ROM applies a clock change by writing 1 here and then
-         * polls +0x14 bit 0 for completion (the Nspire uses +0x0C bit 2). */
+         * polls +0x14 bit 0 for completion (the Nspire uses +0x0C bit 2).
+         * The bit comes up a little after the write, not with it: the
+         * homebrew SDK's copy of that ROM routine waits the other way round,
+         * returning once the bit reads 0, which ends only if the bit is not
+         * set yet right after the write. Set at once, that loop never ended.
+         * The delay is a guess; the ROM's own loop takes any. */
         hw->pmu.wake_mask = v & 0x1FFFFFF;
         if (v & 1) {
             hw->pmu.clocks = hw->pmu.clocks_load;
             pmu_set_clocks(hw);
-            hw->pmu.done |= 1;
+            hw->pmu.done_at = hw->cpu->cycles + 1000;
             printf("[HW] PMU clocks %08X -> CPU %u Hz\n", hw->pmu.clocks, hw->cpu_hz);
         }
         return;
