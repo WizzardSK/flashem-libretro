@@ -1790,7 +1790,8 @@ static void tlb_flush(HW *hw) {
 static uint8_t *page_ptr(HW *hw, uint32_t pa, int wr) {
     if (pa - RAM_BASE < RAM_SIZE) return hw->ram + (pa - RAM_BASE);
     if (pa - MBOX_BASE < MBOX_SIZE) return hw->mbox + (pa - MBOX_BASE);
-    if (!wr && pa + 0x1000 <= hw->rom_size) return (uint8_t *)hw->rom + pa;
+    /* not pa + 0x1000 <= rom_size: for the top page that wraps to 0 */
+    if (!wr && pa < hw->rom_size && hw->rom_size - pa >= 0x1000) return (uint8_t *)hw->rom + pa;
     return NULL;
 }
 
