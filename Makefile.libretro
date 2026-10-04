@@ -112,13 +112,10 @@ CFLAGS  += -Wall -Wextra -std=gnu11 $(fpic) -I$(CORE_DIR)/src -DFLASHEM_NO_SDL
 
 all: $(TARGET)
 
-src/hw.lr.o: src/zevio_dsp.h src/zsp400.h src/midi.h src/cdda_dma.h src/cdsp.h
-src/cdsp.lr.o: src/cdsp.h
-src/zevio_dsp.lr.o: src/zevio_dsp.h src/zsp400.h
-src/zsp400.lr.o: src/zsp400.h
-src/midi.lr.o: src/midi.h
-src/cdda_dma.lr.o: src/cdda_dma.h
-src/audio.lr.o src/vflash.lr.o src/flashem_libretro.lr.o: src/audio.h
+# Header dependencies, written by the compiler and read back (see Makefile).
+CFLAGS  += -MMD -MP
+DEPS    := $(OBJECTS:.o=.d)
+-include $(DEPS)
 
 ifeq ($(STATIC_LINKING), 1)
 $(TARGET): $(OBJECTS)
@@ -132,6 +129,6 @@ endif
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:
-	rm -f $(OBJECTS) $(TARGET)
+	rm -f $(OBJECTS) $(DEPS) $(TARGET)
 
 .PHONY: all clean

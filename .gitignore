@@ -19,3 +19,4 @@ flashem
 # Windows build (make platform=win / Makefile.libretro platform=win)
 *.win.o
 *.exe
+*.d

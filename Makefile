@@ -55,14 +55,15 @@ TOOLS = gereplay$(EXE) disc_analyze$(EXE) mjp_extract$(EXE) ptx_extract$(EXE) di
 
 all: $(BIN) $(TOOLS)
 
-src/hw$(O): src/zevio_dsp.h src/zsp400.h src/midi.h src/cdda_dma.h src/cdsp.h
-src/cdsp$(O): src/cdsp.h
-src/zevio_dsp$(O): src/zevio_dsp.h src/zsp400.h
-src/zsp400$(O): src/zsp400.h
-src/midi$(O): src/midi.h
-src/cdda_dma$(O): src/cdda_dma.h
-src/audio$(O) src/vflash$(O) src/main$(O): src/audio.h
-src/main$(O): src/frame_pacer.h
+# The compiler writes each object's header dependencies next to it (-MMD), and
+# they are read back here, so a changed header rebuilds every object that
+# includes it. The hand-kept list this replaces had gaps: a pull that changed a
+# header left objects built against the old one, and the emulator then ran
+# garbage until a make clean (mrdudz). -MP keeps a deleted header from
+# stopping the build.
+CFLAGS += -MMD -MP
+DEPS    = $(OBJS:.o=.d)
+-include $(DEPS)
 
 $(BIN): $(OBJS)
 	$(CC) $(OBJS) -o $(BIN) $(LDFLAGS)
@@ -96,6 +97,6 @@ disc_compare$(EXE): src/disc_compare.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -f $(OBJS) $(BIN) $(TOOLS) testrom.bin
+	rm -f $(OBJS) $(DEPS) $(BIN) $(TOOLS) testrom.bin
 
 .PHONY: all clean
