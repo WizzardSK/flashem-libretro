@@ -93,6 +93,29 @@ VFlash *vflash_create(const char *disc_path) {
     return vf;
 }
 
+int vflash_memcard_load(VFlash *vf, const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return hw_memcard_insert(vf->hw, NULL, 0);
+    uint8_t *data = malloc(8u << 20);
+    size_t n = data ? fread(data, 1, 8u << 20, f) : 0;
+    fclose(f);
+    int ok = data && hw_memcard_insert(vf->hw, data, (uint32_t)n);
+    free(data);
+    return ok;
+}
+
+int vflash_memcard_save(VFlash *vf, const char *path) {
+    uint32_t len;
+    uint8_t *mc = hw_memcard(vf->hw, &len);
+    if (!mc || !hw_memcard_dirty(vf->hw, 0)) return 1;
+    FILE *f = fopen(path, "wb");
+    if (!f) return 0;
+    int ok = fwrite(mc, 1, len, f) == len;
+    if (fclose(f) != 0) ok = 0;
+    if (ok) hw_memcard_dirty(vf->hw, 1);
+    return ok;
+}
+
 static uint32_t rd32le(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
 static uint16_t rd16le(const uint8_t *p) { return (uint16_t)(p[0] | p[1] << 8); }
 

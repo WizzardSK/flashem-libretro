@@ -20,6 +20,8 @@ static void print_usage(const char *prog) {
         "  --load F[@A] Load a program and start it instead of the boot ROM: an ELF,\n"
         "               a BOOT.BIN, or a raw binary at address A (hex)\n"
         "  --entry A    Start the loaded program at address A (hex) instead\n"
+        "  --memcard F  Insert the memory card image F (8 MB, blank if F does not\n"
+        "               exist); written back on exit when the card was written to\n"
         "  --help       Show this help\n\n"
         "Controls:\n"
         "  Arrow keys   D-Pad\n"
@@ -63,6 +65,7 @@ int main(int argc, char **argv) {
     int scale    = 2;
     int dbg_mode = 0;  /* 0=off, 1=paused at boot, 2=running with debugger */
     const char *program = NULL;
+    const char *memcard = NULL;
     uint32_t load_addr = VFLASH_ADDR_NONE, entry = VFLASH_ADDR_NONE;
 
     /* Parse arguments */
@@ -83,6 +86,8 @@ int main(int argc, char **argv) {
             if (at) { *at = '\0'; load_addr = (uint32_t)strtoul(at + 1, NULL, 16); }
             program = path;
         }
+        else if (strcmp(argv[i], "--memcard") == 0 && i+1 < argc)
+            memcard = argv[++i];
         else if (strcmp(argv[i], "--entry") == 0 && i+1 < argc)
             entry = (uint32_t)strtoul(argv[++i], NULL, 16);
         else if (argv[i][0] != '-') disc_path = argv[i];
@@ -96,6 +101,11 @@ int main(int argc, char **argv) {
     /* Create emulator */
     VFlash *vf = vflash_create(disc_path);
     if (!vf) return 1;
+    if (memcard && !vflash_memcard_load(vf, memcard)) {
+        fprintf(stderr, "[Main] could not read memory card %s\n", memcard);
+        vflash_destroy(vf);
+        return 1;
+    }
     if (program && !vflash_load_program(vf, program, load_addr, entry)) {
         vflash_destroy(vf);
         return 1;
@@ -346,6 +356,8 @@ int main(int argc, char **argv) {
     if (tex) SDL_DestroyTexture(tex);
     if (ren) SDL_DestroyRenderer(ren);
     if (win) SDL_DestroyWindow(win);
+    if (memcard && !vflash_memcard_save(vf, memcard))
+        fprintf(stderr, "[Main] could not write memory card %s\n", memcard);
     vflash_destroy(vf);
     SDL_Quit();
     printf("[Main] Exited cleanly\n");

@@ -51,6 +51,12 @@ VFlash   *vflash_create(const char *disc_path);
  * defaults to the load address for a raw file). Returns 1 on success. */
 #define VFLASH_ADDR_NONE 0xFFFFFFFFu
 int       vflash_load_program(VFlash *vf, const char *path, uint32_t load_addr, uint32_t entry);
+/* The memory card. vflash_memcard_load inserts the card image at path, or a
+ * blank card when the file does not exist yet (0 if it cannot be read);
+ * vflash_memcard_save writes the card back when it was written to since it was
+ * inserted or last saved (1 when there was nothing to do or it went well). */
+int       vflash_memcard_load(VFlash *vf, const char *path);
+int       vflash_memcard_save(VFlash *vf, const char *path);
 void      vflash_destroy(VFlash *vf);
 void      vflash_run_frame(VFlash *vf);
 /* 1 while the ROM is still starting a disc's game (see hw_booting) and fast

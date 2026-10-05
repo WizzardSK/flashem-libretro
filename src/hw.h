@@ -23,6 +23,13 @@ int      hw_booting(HW *hw);
 /* Copies data into SDRAM at a physical address (program loading, before the
  * CPU runs); 0 if it does not fit in the 16 MB at 0x10000000. */
 int      hw_load_phys(HW *hw, uint32_t pa, const uint8_t *data, uint32_t len);
+/* The memory card, an 8 MB DataFlash on the SPI. Insert copies the image in
+ * (shorter ones are padded erased, NULL is a blank card); hw_memcard gives the
+ * card's contents to save, hw_memcard_dirty whether it was written since the
+ * last clear. */
+int      hw_memcard_insert(HW *hw, const uint8_t *data, uint32_t len);
+uint8_t *hw_memcard(HW *hw, uint32_t *len);
+int      hw_memcard_dirty(HW *hw, int clear);
 
 /* One instruction, with interrupts and timers; returns cycles taken. */
 int      hw_step(HW *hw);

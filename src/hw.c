@@ -100,6 +100,9 @@ struct HW {
     uint64_t       cd_tick_us, cd_tmo_us;  /* +0x60 timers: next expiry */
     int            cd_xfer;       /* target found: sectors stream in */
     uint32_t       spi[16];       /* 0xA1000000: SPI master */
+    uint8_t       *mc;            /* the memory card's DataFlash, NULL: no card */
+    uint8_t        mc_buf[2][1024];/* its two SRAM buffers */
+    int            mc_dirty;      /* written since it was last saved */
     uint32_t       dma[0x200 / 4];/* 0xBC000000: DMA controller */
     uint32_t       mathu[16];     /* 0xA4000000: math unit */
     int            dma_log;
@@ -1259,12 +1262,25 @@ static void dmac_write(HW *hw, uint32_t pa, uint32_t v) {
 
 /* ---------------------------------------------------------------- 0xA0000000, 0xA4000000 */
 
-/* 0xA0000000: a window onto an optional external flash. Both kernels look
- * for a "New_Flash_Driver" image there (magic at 0x100A0648, stored with
- * each word byte-swapped) and for a "VFLASHQA" test image at +0xC0, after
- * writing 2 to the SPI master at 0xA1000000. Retail units have neither, so
- * the window reads as erased. */
-static uint32_t xflash_read(HW *hw, uint32_t pa) { (void)hw; (void)pa; return 0xFFFFFFFFu; }
+#define MC_SIZE  (8u << 20)
+#define MC_PAGES 8192u
+
+/* 0xA0000000: the SPI master's mirror of the serial flash, read as words of
+ * four bytes, the first byte the most significant ("everything must be stored
+ * in big endian u32 words, since the content is read via the SPI Mirror",
+ * vtech-tools/memcard/bootcard.c). Both kernels look for a "New_Flash_Driver"
+ * image there (magic at 0x100A0648, stored with each word byte-swapped) and
+ * for a "VFLASHQA" test image at +0xC0, after writing 2 to the SPI master at
+ * 0xA1000000: that is how a memory card made with bootcard boots. Without a
+ * card the window reads as erased. */
+static uint32_t xflash_read(HW *hw, uint32_t pa) {
+    uint32_t o = pa & (MC_SIZE - 4) & ~3u;
+    static int log_n;
+    if (getenv("VFLASH_MCLOG") && log_n++ < 200)
+        printf("[MC] window read %08X PC=%08X\n", pa, hw->cpu->r[15]);
+    if (!hw->mc) return 0xFFFFFFFFu;
+    return (uint32_t)hw->mc[o] << 24 | hw->mc[o + 1] << 16 | hw->mc[o + 2] << 8 | hw->mc[o + 3];
+}
 
 /* 0xA4000000: a format converter the game kernels use: write an operand to
  * a register and read the result back at once.
@@ -1321,23 +1337,161 @@ static void mathu_write(HW *hw, uint32_t pa, uint32_t v) {
 
 /* ---------------------------------------------------------------- SPI master */
 
-/* 0xA1000000: byte-wide SPI master. +0x1C holds the bytes to send (MSB
- * first), +0x04 the length in bits 16+ and a start bit, +0x10 bit 0 is "done",
- * +0x20 the bytes received. The kernel's first command is 0xAB (a serial
- * flash's "release from power-down / read signature"). No device is attached
- * yet: transfers finish at once and MISO floats high. */
+/* 0xA1000000: SPI master. +0x04 starts a transfer: bits 16+ are its length
+ * in bits less one, bit 0 the start. The bits go out of +0x1C and then +0x20,
+ * most significant first, and come in at the bottom: a transfer of up to 32
+ * bits shifts +0x1C alone, a longer one +0x1C and +0x20 as one 64-bit
+ * register (vtech-lib reads a status byte from +0x1C after 24 bits, a data
+ * byte from the bottom of +0x20 after 40 bits and from its top after 64).
+ * +0x10 bit 0 is "done"; a transfer here is done at once.
+ *
+ * One transfer is one command to the selected device, chip select framing it.
+ * On the SPI are the memory card and, on development units, a system flash;
+ * GPIO A2 bit 3 picks the system flash (vtech-lib's SF_initall, MC_initall).
+ * Retail units have no system flash, so only the card answers.
+ *
+ * The card is an Atmel AT45DB642 DataFlash: ID 1F 28 (vtech-tools'
+ * spidump), 8 MB in 8192 pages of 1024 bytes - addressed as page << 10 |
+ * byte, the "power of two" page size - with two 1024-byte SRAM buffers. */
+static uint8_t mc_status(void) {
+    return 0x80 | 0x3C | 1;   /* ready, density 64 Mbit, 1024-byte pages */
+}
+
+static void mc_command(HW *hw, const uint8_t *tx, uint8_t *rx, int n) {
+    uint8_t *m = hw->mc;
+    uint32_t a = (uint32_t)tx[1] << 16 | tx[2] << 8 | tx[3];
+    uint32_t page = a >> 10 & (MC_PAGES - 1), off = a & 0x3FF;
+    static int log_n;
+    if (getenv("VFLASH_MCLOG") && log_n++ < 4000)
+        printf("[MC] cmd %02X addr %06X len %d PC=%08X\n", tx[0], a, n, hw->cpu->r[15]);
+    memset(rx, 0xFF, (size_t)n);
+    switch (tx[0]) {
+    case 0x9F: {              /* manufacturer and device ID */
+        static const uint8_t id[] = { 0x1F, 0x28, 0x00, 0x01, 0x00 };
+        for (int i = 1; i < n; i++) rx[i] = i - 1 < 5 ? id[i - 1] : 0;
+        return;
+    }
+    case 0xD7: case 0x57:     /* status register, repeated while selected */
+        for (int i = 1; i < n; i++) rx[i] = mc_status();
+        return;
+    case 0x03: case 0x0B: case 0xE8: case 0x68: case 0xD2: case 0x52: {
+        /* continuous array read (low and high frequency), main memory page
+         * read: the bytes follow the address and the command's dummy bytes,
+         * a page read wrapping at the end of its page */
+        int skip = tx[0] == 0x03 ? 4 : tx[0] == 0x0B ? 5 : 8;
+        for (int i = skip; i < n; i++) {
+            uint32_t p = tx[0] == 0xD2 || tx[0] == 0x52
+                ? (page << 10 | ((off + (uint32_t)(i - skip)) & 0x3FF))
+                : (a + (uint32_t)(i - skip)) & (MC_SIZE - 1);
+            rx[i] = m[p];
+        }
+        return;
+    }
+    case 0xD4: case 0xD6: case 0x54: case 0x56:   /* buffer read */
+        for (int i = (tx[0] & 0x80) ? 5 : 4; i < n; i++)
+            rx[i] = hw->mc_buf[(tx[0] & 2) != 0][(off + (uint32_t)i - ((tx[0] & 0x80) ? 5u : 4u)) & 0x3FF];
+        return;
+    case 0x84: case 0x87:     /* buffer write */
+        for (int i = 4; i < n; i++)
+            hw->mc_buf[tx[0] == 0x87][(off + (uint32_t)i - 4) & 0x3FF] = tx[i];
+        return;
+    case 0x53: case 0x55:     /* main memory page to buffer */
+        memcpy(hw->mc_buf[tx[0] == 0x55], m + (page << 10), 1024);
+        return;
+    case 0x83: case 0x86: case 0x88: case 0x89: {
+        /* buffer to main memory page, with or without a built-in erase;
+         * without one, programming can only clear bits */
+        const uint8_t *b = hw->mc_buf[tx[0] == 0x86 || tx[0] == 0x89];
+        uint8_t *p = m + (page << 10);
+        for (int i = 0; i < 1024; i++) p[i] = tx[0] <= 0x86 ? b[i] : p[i] & b[i];
+        hw->mc_dirty = 1;
+        return;
+    }
+    case 0x82: case 0x85: {   /* main memory program through a buffer */
+        uint8_t *b = hw->mc_buf[tx[0] == 0x85];
+        for (int i = 4; i < n; i++) b[(off + (uint32_t)i - 4) & 0x3FF] = tx[i];
+        memcpy(m + (page << 10), b, 1024);
+        hw->mc_dirty = 1;
+        return;
+    }
+    case 0x81:                /* page erase */
+        memset(m + (page << 10), 0xFF, 1024);
+        hw->mc_dirty = 1;
+        return;
+    case 0x50:                /* block erase: 8 pages */
+        memset(m + ((page & ~7u) << 10), 0xFF, 8 * 1024);
+        hw->mc_dirty = 1;
+        return;
+    case 0x7C:                /* sector erase */
+        memset(m + ((page & ~255u) << 10), 0xFF, 256 * 1024);
+        hw->mc_dirty = 1;
+        return;
+    case 0xC7:                /* chip erase: C7 94 80 9A */
+        if (n >= 4 && tx[1] == 0x94 && tx[2] == 0x80 && tx[3] == 0x9A) {
+            memset(m, 0xFF, MC_SIZE);
+            hw->mc_dirty = 1;
+        }
+        return;
+    }
+    /* 0xAB release from deep power-down, 0xB9 deep power-down and the rest
+     * answer nothing */
+}
+
+static void spi_transfer(HW *hw, uint32_t ctrl) {
+    int bits = (int)(ctrl >> 16 & 0x3F) + 1, n = bits / 8;
+    uint64_t reg = (uint64_t)hw->spi[0x1C >> 2] << 32 | hw->spi[0x20 >> 2];
+    uint8_t tx[8], rx[8];
+    if (bits <= 32) reg = (uint64_t)hw->spi[0x1C >> 2] << 32;
+    for (int i = 0; i < 8; i++) tx[i] = (uint8_t)(reg >> (56 - 8 * i));
+    memset(rx, 0xFF, sizeof(rx));
+    /* GPIO A2 bit 3 low: the card, if one is in */
+    if (hw->mc && n && !(hw->gpio[0].out[2] & 0x08))
+        mc_command(hw, tx, rx, n);
+    uint64_t in = 0;
+    for (int i = 0; i < n; i++) in = in << 8 | rx[i];
+    if (bits % 8) in = in << (bits % 8) | ((1u << (bits % 8)) - 1);
+    if (bits <= 32) {
+        uint32_t d = hw->spi[0x1C >> 2];
+        hw->spi[0x1C >> 2] = (bits == 32 ? 0 : d << bits) | (uint32_t)in;
+    } else {
+        reg = (bits == 64 ? 0 : reg << bits) | in;
+        hw->spi[0x1C >> 2] = (uint32_t)(reg >> 32);
+        hw->spi[0x20 >> 2] = (uint32_t)reg;
+    }
+}
+
 static uint32_t spi_read(HW *hw, uint32_t pa) {
     switch (pa & 0xFF) {
     case 0x10: return 1;
-    case 0x20: return 0xFFFFFFFFu;
     }
     return hw->spi[(pa & 0x3F) >> 2];
 }
 
 static void spi_write(HW *hw, uint32_t pa, uint32_t v) {
-    if ((pa & 0xFF) == 0x04 && (v & 1) && hw->spi_log++ < 40)
+    if ((pa & 0xFF) == 0x04 && (v & 1) && hw->spi_log++ < 40 && !hw->mc)
         printf("[SPI] tx %08X len=%u PC=%08X\n", hw->spi[0x1C >> 2], v >> 16, hw->cpu->r[15]);
     hw->spi[(pa & 0x3F) >> 2] = v;
+    if ((pa & 0xFF) == 0x04 && (v & 1))
+        spi_transfer(hw, v);
+}
+
+int hw_memcard_insert(HW *hw, const uint8_t *data, uint32_t len) {
+    if (!hw->mc && !(hw->mc = malloc(MC_SIZE))) return 0;
+    memset(hw->mc, 0xFF, MC_SIZE);
+    if (data) memcpy(hw->mc, data, len < MC_SIZE ? len : MC_SIZE);
+    hw->mc_dirty = 0;
+    return 1;
+}
+
+uint8_t *hw_memcard(HW *hw, uint32_t *len) {
+    if (len) *len = hw->mc ? MC_SIZE : 0;
+    return hw->mc;
+}
+
+int hw_memcard_dirty(HW *hw, int clear) {
+    int d = hw->mc_dirty;
+    if (clear) hw->mc_dirty = 0;
+    return d;
 }
 
 /* ---------------------------------------------------------------- display */
@@ -2011,6 +2165,7 @@ HW *hw_create(ARM9 *cpu, const uint8_t *rom, uint32_t rom_size,
 
 void hw_destroy(HW *hw) {
     if (!hw) return;
+    free(hw->mc);
     free(hw->ram);
     free(hw);
 }

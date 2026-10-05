@@ -14,6 +14,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#ifdef _WIN32
+#include <direct.h>
+#else
+#include <sys/stat.h>
+#endif
 
 #include "libretro.h"
 #include "vflash.h"
@@ -223,6 +228,18 @@ void retro_run(void)
    flashem_audio_output(audio);
 }
 
+static char s_memcard_path[1100];
+
+/* mkdir -p for the one level the card needs */
+static void path_mkdir(const char *dir)
+{
+#ifdef _WIN32
+   _mkdir(dir);
+#else
+   mkdir(dir, 0755);
+#endif
+}
+
 bool retro_load_game(const struct retro_game_info *game)
 {
    s_audio_count = s_audio_offset = 0;
@@ -276,6 +293,25 @@ bool retro_load_game(const struct retro_game_info *game)
       return false;
    }
 
+   /* The memory card: one card, as on the console, whatever disc is in -
+    * saves/flashem/memcard.bin, blank until something writes to it. A card
+    * made with vtech-tools' bootcard goes there too. */
+   {
+      const char *savedir = NULL;
+      s_memcard_path[0] = '\0';
+      if (environ_cb(RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY, &savedir) && savedir && *savedir)
+      {
+         char dir[1024];
+         snprintf(dir, sizeof(dir), "%s/flashem", savedir);
+         path_mkdir(dir);
+         snprintf(s_memcard_path, sizeof(s_memcard_path), "%s/memcard.bin", dir);
+         if (vflash_memcard_load(s_vf, s_memcard_path))
+            log_cb(RETRO_LOG_INFO, "FlashEm: memory card '%s'\n", s_memcard_path);
+         else
+            log_cb(RETRO_LOG_WARN, "FlashEm: could not read memory card '%s'\n", s_memcard_path);
+      }
+   }
+
    /* No device to open here - the samples go out through retro_run - but the
     * emulator gates WAV playback on the audio being live, so say that it is. */
    audio_init_external((Audio*)vflash_get_audio(s_vf));
@@ -298,6 +334,8 @@ void retro_unload_game(void)
    s_audio_count = s_audio_offset = 0;
    if (s_vf)
    {
+      if (s_memcard_path[0] && !vflash_memcard_save(s_vf, s_memcard_path))
+         log_cb(RETRO_LOG_ERROR, "FlashEm: could not write memory card '%s'\n", s_memcard_path);
       vflash_destroy(s_vf);
       s_vf = NULL;
    }
