@@ -87,7 +87,7 @@ typedef void (*retro_set_input_state_t)(retro_input_state_t);
 
 int main(int argc, char **argv) {
     if (argc < 4) {
-        fprintf(stderr, "usage: retro_smoke <core> <game.cue> <system dir> [frames] [out.ppm]\n");
+        fprintf(stderr, "usage: retro_smoke <core> <game.cue|-> <system dir> [frames] [out.ppm]\n");
         return 2;
     }
     sysdir = argv[3];
@@ -114,8 +114,9 @@ int main(int argc, char **argv) {
     retro_set_input_state(input_state_cb);
     retro_init();
 
+    /* "-" for no content: the console's own menu */
     struct retro_game_info gi = { argv[2], NULL, 0, NULL };
-    if (!retro_load_game(&gi)) { fprintf(stderr, "retro_load_game failed\n"); return 1; }
+    if (!retro_load_game(strcmp(argv[2], "-") ? &gi : NULL)) { fprintf(stderr, "retro_load_game failed\n"); return 1; }
     for (long i = 0; i < frames; i++) {
         unsigned long before = samples_seen;
         retro_run();

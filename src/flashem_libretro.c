@@ -85,7 +85,9 @@ void retro_set_environment(retro_environment_t cb)
       { pad, 1 },
       { NULL, 0 },
    };
-   bool no_content = false;
+   /* Without content the console starts into its own menu, the drive empty,
+    * as it was used with a memory card (mrdudz, #3). */
+   bool no_content = true;
 
    environ_cb = cb;
 
@@ -258,11 +260,7 @@ bool retro_load_game(const struct retro_game_info *game)
       { 0, 0, 0, 0, NULL },
    };
 
-   if (!game || !game->path)
-   {
-      log_cb(RETRO_LOG_ERROR, "FlashEm: no content path\n");
-      return false;
-   }
+   const char *disc = game && game->path && *game->path ? game->path : NULL;
 
    /* XRGB8888 because that is what the framebuffer already is; a frontend that
     * refuses it has nothing to draw. */
@@ -285,11 +283,11 @@ bool retro_load_game(const struct retro_game_info *game)
       }
    }
 
-   s_vf = vflash_create(game->path);
+   s_vf = vflash_create(disc);
    if (!s_vf)
    {
       log_cb(RETRO_LOG_ERROR, "FlashEm: could not start '%s' - is 70004.bin in the "
-             "system directory?\n", game->path);
+             "system directory?\n", disc ? disc : "(no disc)");
       return false;
    }
 
@@ -316,7 +314,7 @@ bool retro_load_game(const struct retro_game_info *game)
     * emulator gates WAV playback on the audio being live, so say that it is. */
    audio_init_external((Audio*)vflash_get_audio(s_vf));
 
-   log_cb(RETRO_LOG_INFO, "FlashEm: loaded '%s'\n", game->path);
+   log_cb(RETRO_LOG_INFO, "FlashEm: loaded '%s'\n", disc ? disc : "(no disc, the console's menu)");
    return true;
 }
 

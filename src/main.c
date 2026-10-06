@@ -10,8 +10,9 @@
 static void print_usage(const char *prog) {
     fprintf(stderr,
         "FlashEm - V.Flash emulator\n"
-        "Usage: %s [options] <disc.cue>\n"
-        "       %s [options] --load <program> [<disc.cue>]\n\n"
+        "Usage: %s [options] [<disc.cue>]\n"
+        "       %s [options] --load <program> [<disc.cue>]\n"
+        "With no disc the console starts into its menu, with the drive empty.\n\n"
         "Options:\n"
         "  --dbg        Start interactive debugger (paused at boot)\n"
         "  --dbg-run    Start interactive debugger (running)\n"
@@ -91,11 +92,6 @@ int main(int argc, char **argv) {
         else if (strcmp(argv[i], "--entry") == 0 && i+1 < argc)
             entry = (uint32_t)strtoul(argv[++i], NULL, 16);
         else if (argv[i][0] != '-') disc_path = argv[i];
-    }
-
-    if (!disc_path && !program) {
-        print_usage(argv[0]);
-        return 1;
     }
 
     /* Create emulator */
