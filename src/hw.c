@@ -80,7 +80,8 @@ struct HW {
     /* 16550-style UARTs at 0x90020000 and 0x90030000. */
     struct { uint8_t ier, lcr, dll, dlm, pending; char line[256]; int len;
              uint8_t rx[128]; int rx_h, rx_n;       /* bytes from the controller */
-             uint8_t pk[64]; int pk_len; } uart[2];  /* packet being sent to it */
+             uint8_t pk[64]; int pk_len;     /* packet being sent to it */
+             int pad_open; } uart[2];          /* a packet was, so the pad answers */
 
     /* GPIO banks at 0x90000000 (A) and 0x900D0000 (B): four 8-bit ports each
      * at stride 0x40; +0x10 direction, +0x14 output, +0x18 input. Bank B
@@ -607,7 +608,11 @@ static void rtc_write(HW *hw, uint32_t pa, uint32_t v) {
  *   [Y & FF, Y >> 8 | (X & F) << 4, X >> 4, buttons]. */
 static void uart_rx_push(HW *hw, int u, uint8_t b) {
     typeof(hw->uart[0]) *s = &hw->uart[u];
-    if (s->rx_n < (int)sizeof s->rx) s->rx[(s->rx_h + s->rx_n++) % sizeof s->rx] = b;
+    /* Without the receive interrupt the program polls, and the UART holds
+     * what its 16-byte FIFO holds: later bytes are lost, so a poll finds a
+     * recent report rather than a backlog of old ones. */
+    int cap = (s->ier & 1) ? (int)sizeof s->rx : 16;
+    if (s->rx_n < cap) s->rx[(s->rx_h + s->rx_n++) % sizeof s->rx] = b;
 }
 
 static void pad_send(HW *hw, int u, const uint8_t *p, int n) {
@@ -688,8 +693,11 @@ static void pad_report6(HW *hw, int u) {
     if (e && sscanf(e, "%lx,%lx@%lu-%lu", &sx, &sy, &a, &z) == 4 && hw->frame >= a && hw->frame < z) {
         x = (uint32_t)sx; y = (uint32_t)sy;
     }
+    /* The low nibble of the first byte is 1 on the real controller:
+     * vtech-lib's driver takes only reports whose first encoded byte is 0x41
+     * (uart/pad.c), and the game kernel ignores it. */
     uint8_t p[6] = {
-        (uint8_t)((x & 15) << 4), (uint8_t)((x >> 4 & 15) | (y & 7) << 5),
+        (uint8_t)((x & 15) << 4 | 1), (uint8_t)((x >> 4 & 15) | (y & 7) << 5),
         (uint8_t)((y >> 3 & 31) | (b & 3) << 6), (uint8_t)(b >> 2), (uint8_t)(b >> 10 & 63), 0 };
     pad_send(hw, u, p, 6);
 }
@@ -699,18 +707,23 @@ static void pad_reply(HW *hw, int u) { pad_report(hw, u); }
 
 /* Once a frame: the controller on port 0 sends the four colour buttons as
  * n = 2 events when pressed (codes 1-4 set the game's last-button byte,
- * 0x10A6DD18), and a stick report every other frame. Only once the kernel
+ * 0x10A6DD18), and an n = 6 report every other frame. The n = 4 stick report
+ * is only the answer to a packet from the console: sent every other frame as
+ * well, it fell between the n = 6 reports that vtech-lib's driver reads 15
+ * bytes at a time, and it lost them all (SpongeBob's menus work without it). Only once the kernel
  * has opened the port (receive interrupt enabled). */
 static void uart_int_check(HW *hw, int u);
 static void pad_frame(HW *hw) {
     int u = 0;
-    if (!(hw->uart[u].ier & 1)) return;
+    /* Once the kernel has opened the port (receive interrupt enabled), or a
+     * program has sent the controller a packet and polls for the answer
+     * without interrupts (vtech-lib's PADMODE_POLLING). */
+    if (!(hw->uart[u].ier & 1) && !hw->uart[u].pad_open) return;
     uint32_t in = pad_buttons(hw), down = in & ~hw->pad_prev;
     hw->pad_prev = in;
     static const uint32_t col[4] = { VFLASH_BTN_RED, VFLASH_BTN_YELLOW, VFLASH_BTN_GREEN, VFLASH_BTN_BLUE };
     for (int i = 0; i < 4; i++)
         if (down & col[i]) { uint8_t ev[2] = { (uint8_t)(i + 1), 0 }; pad_send(hw, u, ev, 2); }
-    if (!(hw->frame & 1) || (down & 0x10F)) pad_report(hw, u);
     if (hw->frame & 1) pad_report6(hw, u);
     uart_int_check(hw, u);
 }
@@ -734,6 +747,7 @@ static void uart_out(HW *hw, int u, uint8_t ch) {
     if (s->pk_len >= 3 && s->pk[0] == 0xFF &&
         s->pk_len == (s->pk[2] + 1) / 2 * 3 + 6) {
         s->pk_len = 0;
+        s->pad_open = 1;
         if (!getenv("VFLASH_NOPAD")) pad_reply(hw, u);
     }
     if (ch == '\n' || s->len == (int)sizeof(s->line) - 1) {
