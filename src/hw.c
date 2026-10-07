@@ -1712,8 +1712,9 @@ static void ve_write(HW *hw, uint32_t pa, uint32_t v) {
     else if (off >= 0x2000 && off < 0x3000) r = &hw->ve_hi[(off - 0x2000) >> 2];
     else { unmodelled(hw, pa, 1, 32, v); return; }
     if ((off == 0x160 || off == 0x164) && *r != v && getenv("VFLASH_VELOG"))
-        printf("[VE] f%lu layer %u address %08X (was %08X) PC=%08X\n", (unsigned long)hw->frame,
-               (off - 0x160) / 4, v, *r, hw->cpu->r[15]);
+        printf("[VE] f%lu layer %u address %08X (was %08X) PC=%08X; +100 %08X +104 %08X +108 %08X\n",
+               (unsigned long)hw->frame, (off - 0x160) / 4, v, *r, hw->cpu->r[15],
+               hw->ve[0x100 >> 2], hw->ve[0x104 >> 2], hw->ve[0x108 >> 2]);
     if (*r != v && (hw->ve_log++ < 300 || (getenv("VFLASH_VELOG") && hw->ve_log < 3000)))
         printf("[VE] %08X = %08X (was %08X) PC=%08X\n", pa, v, *r, hw->cpu->r[15]);
     *r = v;
@@ -1728,7 +1729,8 @@ static void ve_write(HW *hw, uint32_t pa, uint32_t v) {
  *   +0x150 + 4i    tile layer i's tiles: 64 bytes each, 8-bit palette indices
  *   +0x10C         background colour (BGR555), where every layer is clear
  *   +0x160         colour layer 0: 16-bit BGR555, bit 15 = transparent
- *   +0x164/168/16C colour layer 1: linear Y/U/V 4:2:0 planes
+ *   +0x164/168/16C colour layer 1: linear Y/U/V 4:2:0 planes, or with +0x100
+ *                  bit 14 a 16-bit BGR555 surface at +0x164 like layer 0
  *   +0x130/+0x138  windows of colour layers 0/1: start, end = x | y << 16
  * All tile layers share the palette at 0xB8000800, whose bit 15 is also
  * transparent. Drawn back to front over the background:
@@ -1799,7 +1801,11 @@ static void ve_render(HW *hw) {
         /* Multisports ARM109F6114 sets all three plane addresses together;
          * the DSP DMA fills them with independently verified planar4:2:0.
          * This layer was previously misread as packed RGB, doubling pixels. */
-        if(j==1) {
+        /* +0x100 bit 14 makes colour layer 1 a 16-bit RGB surface like layer 0
+         * instead of the movie's Y/U/V planes: the ROM's boot splash (0x4020)
+         * and vtech-lib's SDL (0x4030, a 352x288 framebuffer at 0x10C00000)
+         * show their pictures this way and never set the U/V planes. */
+        if(j==1 && !(en & 0x4000)) {
             int cw=(w+1)/2, ch=(h+1)/2;
             const uint8_t *yp=ram_at(hw,hw->ve[0x164>>2],(uint32_t)(w*h));
             const uint8_t *up=ram_at(hw,hw->ve[0x168>>2],(uint32_t)(cw*ch));
