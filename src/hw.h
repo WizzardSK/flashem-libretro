@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include <stdio.h>
 #include "arm9.h"
 
 /* The V.Flash machine: the ARM core runs the real boot ROM, and everything it
@@ -46,3 +47,6 @@ uint8_t  hw_read8 (void *ctx, uint32_t va);
 void     hw_write32(void *ctx, uint32_t va, uint32_t v);
 void     hw_write16(void *ctx, uint32_t va, uint16_t v);
 void     hw_write8 (void *ctx, uint32_t va, uint8_t v);
+
+/* vflash_set_uart_output() */
+extern FILE *hw_uart_out;

@@ -169,6 +169,17 @@ static uint32_t flashem_poll_buttons(void)
       { RETRO_DEVICE_ID_JOYPAD_X,      VFLASH_BTN_GREEN  },
       { RETRO_DEVICE_ID_JOYPAD_Y,      VFLASH_BTN_BLUE   },
       { RETRO_DEVICE_ID_JOYPAD_START,  VFLASH_BTN_ENTER  },
+      { RETRO_DEVICE_ID_JOYPAD_SELECT, VFLASH_BTN_EXIT   },
+      { RETRO_DEVICE_ID_JOYPAD_L,      VFLASH_BTN_L      },
+      { RETRO_DEVICE_ID_JOYPAD_R,      VFLASH_BTN_R      },
+      { RETRO_DEVICE_ID_JOYPAD_L3,     VFLASH_BTN_STICK  },
+      { RETRO_DEVICE_ID_JOYPAD_L2,     VFLASH_BTN_QUESTION },
+      { RETRO_DEVICE_ID_JOYPAD_R2,     VFLASH_BTN_BOOK   },
+   };
+   /* A-D: the RetroPad has no buttons left for them, so keys 1-4 */
+   static const struct { unsigned key; uint32_t mask; } keys[] = {
+      { RETROK_1, VFLASH_BTN_A }, { RETROK_2, VFLASH_BTN_B },
+      { RETROK_3, VFLASH_BTN_C }, { RETROK_4, VFLASH_BTN_D },
    };
    uint32_t buttons = 0;
    size_t i;
@@ -180,6 +191,11 @@ static uint32_t flashem_poll_buttons(void)
    {
       if (input_state_cb(0, RETRO_DEVICE_JOYPAD, 0, map[i].id))
          buttons |= map[i].mask;
+   }
+   for (i = 0; i < sizeof(keys) / sizeof(keys[0]); i++)
+   {
+      if (input_state_cb(0, RETRO_DEVICE_KEYBOARD, 0, keys[i].key))
+         buttons |= keys[i].mask;
    }
 
    return buttons;
@@ -256,7 +272,13 @@ bool retro_load_game(const struct retro_game_info *game)
       { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_B,     "Yellow" },
       { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_X,     "Green" },
       { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_Y,     "Blue" },
-      { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_START, "Enter" },
+      { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_START, "OK" },
+      { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_SELECT, "Exit" },
+      { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L,     "Left Shoulder" },
+      { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R,     "Right Shoulder" },
+      { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L3,    "Stick Button" },
+      { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_L2,    "Question" },
+      { 0, RETRO_DEVICE_JOYPAD, 0, RETRO_DEVICE_ID_JOYPAD_R2,    "Book" },
       { 0, 0, 0, 0, NULL },
    };
 

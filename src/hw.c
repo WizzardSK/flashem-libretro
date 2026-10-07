@@ -676,15 +676,23 @@ static void pad_report6(HW *hw, int u) {
     if (in & VFLASH_BTN_DOWN)  x = 0x81;
     if (in & VFLASH_BTN_RIGHT) y = 0x7F;
     if (in & VFLASH_BTN_LEFT)  y = 0x81;
-    if (in & VFLASH_BTN_ENTER) b |= 1u << 2;   /* OK (starts the game from the title) */
-    /* Colour buttons also appear here: Multisports' event briefing takes green
-     * (bit 12, "Start") and yellow (bit 11, "Anleitung") from this report, not from
-     * the n = 2 events - found by trying each bit (2026-09-27). Red 10 / blue 13
-     * follow the buttons' order on the pad and are unconfirmed. */
-    if (in & VFLASH_BTN_RED)    b |= 1u << 10;
-    if (in & VFLASH_BTN_YELLOW) b |= 1u << 11;
-    if (in & VFLASH_BTN_GREEN)  b |= 1u << 12;
-    if (in & VFLASH_BTN_BLUE)   b |= 1u << 13;
+    /* The button bits, from vtech-doc (the controller's packet) and
+     * vtech-lib's pad.h: the four colour buttons are the pad's d-pad -
+     * yellow up, red right, blue down, green left. (Multisports' event
+     * briefing takes bit 12 as "Start" and bit 11 as "Anleitung", found by
+     * trying each bit: red and yellow.) */
+    static const struct { uint32_t in; int bit; } bits[] = {
+        { VFLASH_BTN_L, 0 },        { VFLASH_BTN_R, 1 },
+        { VFLASH_BTN_ENTER, 2 },    { VFLASH_BTN_STICK, 3 },
+        { VFLASH_BTN_A, 4 },        { VFLASH_BTN_B, 5 },
+        { VFLASH_BTN_C, 6 },        { VFLASH_BTN_D, 7 },
+        { VFLASH_BTN_QUESTION, 8 }, { VFLASH_BTN_BOOK, 9 },
+        { VFLASH_BTN_EXIT, 10 },    { VFLASH_BTN_YELLOW, 11 },
+        { VFLASH_BTN_RED, 12 },     { VFLASH_BTN_BLUE, 13 },
+        { VFLASH_BTN_GREEN, 14 },
+    };
+    for (size_t i = 0; i < sizeof bits / sizeof bits[0]; i++)
+        if (in & bits[i].in) b |= 1u << bits[i].bit;
     const char *e = getenv("VFLASH_PADBITS");
     unsigned long m = 0, a = 0, z = 0;
     if (e && sscanf(e, "%lx@%lu-%lu", &m, &a, &z) == 3 && hw->frame >= a && hw->frame < z) b |= (uint32_t)m;
@@ -734,6 +742,8 @@ static void uart_int_check(HW *hw, int u) {
     int_set(hw, u ? 2 : INT_SERIAL, on);
 }
 
+FILE *hw_uart_out;
+
 static void uart_out(HW *hw, int u, uint8_t ch) {
     typeof(hw->uart[0]) *s = &hw->uart[u];
     {
@@ -752,7 +762,12 @@ static void uart_out(HW *hw, int u, uint8_t ch) {
     }
     if (ch == '\n' || s->len == (int)sizeof(s->line) - 1) {
         s->line[s->len] = 0;
-        printf("[UART%d] %s\n", u, s->line);
+        if (hw_uart_out) {
+            fprintf(hw_uart_out, "%s\n", s->line);
+            fflush(hw_uart_out);
+        } else {
+            printf("[UART%d] %s\n", u, s->line);
+        }
         s->len = 0;
     } else if (ch != '\r') {
         s->line[s->len++] = (ch >= 0x20 && ch < 0x7F) ? (char)ch : '.';

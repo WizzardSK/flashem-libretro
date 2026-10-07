@@ -27,7 +27,17 @@
 #define VFLASH_BTN_YELLOW   (1 << 5)
 #define VFLASH_BTN_GREEN    (1 << 6)
 #define VFLASH_BTN_BLUE     (1 << 7)
-#define VFLASH_BTN_ENTER    (1 << 8)
+#define VFLASH_BTN_ENTER    (1 << 8)   /* OK */
+#define VFLASH_BTN_EXIT     (1 << 9)
+#define VFLASH_BTN_L        (1 << 10)  /* shoulder buttons */
+#define VFLASH_BTN_R        (1 << 11)
+#define VFLASH_BTN_STICK    (1 << 12)  /* the stick pressed in */
+#define VFLASH_BTN_QUESTION (1 << 13)
+#define VFLASH_BTN_BOOK     (1 << 14)
+#define VFLASH_BTN_A        (1 << 15)
+#define VFLASH_BTN_B        (1 << 16)
+#define VFLASH_BTN_C        (1 << 17)
+#define VFLASH_BTN_D        (1 << 18)
 
 typedef struct VFlash VFlash;
 
@@ -64,6 +74,10 @@ void      vflash_run_frame(VFlash *vf);
  * run frames back to back and show only some of them. */
 int       vflash_fast_booting(VFlash *vf);
 void      vflash_set_input(VFlash *vf, uint32_t buttons);
+
+/* Where the lines the program writes to its UARTs go, without the emulator's
+ * "[UARTn]" prefix (NULL: to stdout with it, among the emulator's own log). */
+void      vflash_set_uart_output(FILE *f);
 uint32_t *vflash_get_framebuffer(VFlash *vf);
 /* Current picture size; the framebuffer's pitch is width * 4 bytes. */
 void      vflash_get_screen_size(VFlash *vf, int *w, int *h);

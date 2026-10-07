@@ -6,6 +6,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <io.h>
+#define dup _dup
+#else
+#include <unistd.h>
+#endif
 
 static void print_usage(const char *prog) {
     fprintf(stderr,
@@ -23,11 +29,18 @@ static void print_usage(const char *prog) {
         "  --entry A    Start the loaded program at address A (hex) instead\n"
         "  --memcard F  Insert the memory card image F (8 MB, blank if F does not\n"
         "               exist); written back on exit when the card was written to\n"
+        "  --quiet      Show only what the program writes to its UARTs, not the\n"
+        "               emulator's log\n"
         "  --help       Show this help\n\n"
         "Controls:\n"
-        "  Arrow keys   D-Pad\n"
-        "  Z / X / C / V  Red/Yellow/Green/Blue\n"
-        "  Enter        Enter/OK\n"
+        "  Arrow keys   Stick\n"
+        "  Z / X / C / V  Red/Yellow/Green/Blue (right/up/left/down)\n"
+        "  Enter        OK\n"
+        "  Backspace    Exit\n"
+        "  Q / W        Left/Right shoulder\n"
+        "  Space        Stick button\n"
+        "  H / B        Question/Book\n"
+        "  1 - 4        A-D\n"
         "  F2           Pause/resume debugger\n"
         "  F11          Toggle fullscreen\n"
         "  Esc          Quit\n\n"
@@ -67,6 +80,7 @@ int main(int argc, char **argv) {
     int dbg_mode = 0;  /* 0=off, 1=paused at boot, 2=running with debugger */
     const char *program = NULL;
     const char *memcard = NULL;
+    int quiet = 0;
     uint32_t load_addr = VFLASH_ADDR_NONE, entry = VFLASH_ADDR_NONE;
 
     /* Parse arguments */
@@ -91,7 +105,21 @@ int main(int argc, char **argv) {
             memcard = argv[++i];
         else if (strcmp(argv[i], "--entry") == 0 && i+1 < argc)
             entry = (uint32_t)strtoul(argv[++i], NULL, 16);
+        else if (strcmp(argv[i], "--quiet") == 0)   quiet = 1;
         else if (argv[i][0] != '-') disc_path = argv[i];
+    }
+
+    /* Only what the program writes to its UARTs on the console: the
+     * emulator's own log, on stdout and stderr, goes to the null device. */
+    if (quiet) {
+#ifdef _WIN32
+        const char *null_device = "NUL";
+#else
+        const char *null_device = "/dev/null";
+#endif
+        FILE *con = fdopen(dup(fileno(stdout)), "w");
+        if (con && freopen(null_device, "w", stdout) && freopen(null_device, "w", stderr))
+            vflash_set_uart_output(con);
     }
 
     /* Create emulator */
@@ -232,6 +260,16 @@ int main(int argc, char **argv) {
             if (keys[SDL_SCANCODE_C])      buttons |= VFLASH_BTN_GREEN;
             if (keys[SDL_SCANCODE_V])      buttons |= VFLASH_BTN_BLUE;
             if (keys[SDL_SCANCODE_RETURN]) buttons |= VFLASH_BTN_ENTER;
+            if (keys[SDL_SCANCODE_BACKSPACE]) buttons |= VFLASH_BTN_EXIT;
+            if (keys[SDL_SCANCODE_Q])      buttons |= VFLASH_BTN_L;
+            if (keys[SDL_SCANCODE_W])      buttons |= VFLASH_BTN_R;
+            if (keys[SDL_SCANCODE_SPACE])  buttons |= VFLASH_BTN_STICK;
+            if (keys[SDL_SCANCODE_H])      buttons |= VFLASH_BTN_QUESTION;
+            if (keys[SDL_SCANCODE_B])      buttons |= VFLASH_BTN_BOOK;
+            if (keys[SDL_SCANCODE_1])      buttons |= VFLASH_BTN_A;
+            if (keys[SDL_SCANCODE_2])      buttons |= VFLASH_BTN_B;
+            if (keys[SDL_SCANCODE_3])      buttons |= VFLASH_BTN_C;
+            if (keys[SDL_SCANCODE_4])      buttons |= VFLASH_BTN_D;
         }
         vflash_set_input(vf, buttons);
 
