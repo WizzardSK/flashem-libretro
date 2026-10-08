@@ -181,6 +181,18 @@ standalone frontend's accelerated pacing.
 | C | Green | X |
 | V | Blue | Y |
 | Enter | Enter / OK | Start |
+| Backspace | Exit | Select |
+| Q / W | Left / right shoulder | L / R |
+| Space | Stick button | L3 |
+| H / B | Question / book | L2 / R2 |
+| 1-4 | A-D | keyboard 1-4 |
+| 5 / 6 / 7 | Console: play / stop / forward | keyboard 5 / 6 / 7 |
+| 8 / 9 | Console: volume down / up | keyboard 8 / 9 |
+| Home / End | Console: power on / off | keyboard Home / End |
+
+The console's power and play LEDs go to RetroArch's LED driver (Settings >
+LEDs) as LEDs 0 and 1 and to the log; the standalone frontend prints them when
+they change.
 
 With RetroArch's default keyboard mapping of the RetroPad, that is: arrow keys,
 X for red, Z for yellow, S for green, A for blue, and Enter.

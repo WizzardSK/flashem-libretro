@@ -38,6 +38,18 @@
 #define VFLASH_BTN_B        (1 << 16)
 #define VFLASH_BTN_C        (1 << 17)
 #define VFLASH_BTN_D        (1 << 18)
+/* The console's own buttons, not the controller's (vtech-lib button.c) */
+#define VFLASH_BTN_CON_PLAY     (1 << 19)
+#define VFLASH_BTN_CON_STOP     (1 << 20)
+#define VFLASH_BTN_CON_FORWARD  (1 << 21)
+#define VFLASH_BTN_CON_VOL_UP   (1 << 22)
+#define VFLASH_BTN_CON_VOL_DOWN (1 << 23)
+#define VFLASH_BTN_CON_POWER_OFF (1 << 24)
+#define VFLASH_BTN_CON_POWER_ON  (1 << 25)
+
+/* The console's LEDs (vtech-lib led.c), from vflash_leds() */
+#define VFLASH_LED_POWER (1 << 0)
+#define VFLASH_LED_PLAY  (1 << 1)
 
 typedef struct VFlash VFlash;
 
@@ -74,6 +86,8 @@ void      vflash_run_frame(VFlash *vf);
  * run frames back to back and show only some of them. */
 int       vflash_fast_booting(VFlash *vf);
 void      vflash_set_input(VFlash *vf, uint32_t buttons);
+/* Which of the console's LEDs are lit, VFLASH_LED_* bits */
+unsigned  vflash_leds(VFlash *vf);
 
 /* Where the lines the program writes to its UARTs go, without the emulator's
  * "[UARTn]" prefix (NULL: to stdout with it, among the emulator's own log). */

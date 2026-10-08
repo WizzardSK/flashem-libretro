@@ -211,6 +211,7 @@ int vflash_fast_booting(VFlash *vf) {
     return on && hw_booting(vf->hw);
 }
 void      vflash_set_input(VFlash *vf, uint32_t b)      { hw_set_input(vf->hw, b); }
+unsigned  vflash_leds(VFlash *vf)                       { return hw_leds(vf->hw); }
 void      vflash_set_uart_output(FILE *f)               { hw_uart_out = f; }
 uint32_t *vflash_get_framebuffer(VFlash *vf)            { return vf->framebuf; }
 void      vflash_get_screen_size(VFlash *vf, int *w, int *h) { hw_screen_size(vf->hw, w, h); }

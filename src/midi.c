@@ -51,6 +51,21 @@ static int ima_supported(const uint32_t *r) {
            (r[2]-r[0])%34==0;
 }
 
+/* Plain PCM at a fixed rate, the family the observed tuples above belong to,
+ * read from the mode bits instead of a whole tuple: 0x1E0 with bit 0 for 8-bit
+ * unsigned samples (else 16-bit signed), bit 2 for 22050 Hz or bit 3 for
+ * 11025 Hz, bit 4 to loop from +0x08; bit 1 (IMA4) is ima_supported's. The
+ * pitch at +0x10 scales the rate, /4096: vtech-lib's fctest plays 22 kHz
+ * 8-bit music as mode 0x1E9 at pitch 0x1FFF (mrdudz, issue #3). The bits come
+ * from homebrew written against the hardware, not from a capture. */
+static int pcm_supported(const uint32_t *r) {
+    unsigned rate = r[3] & 0xc;
+    return (r[3] & ~0x1du) == 0x1e0 && (rate == 4 || rate == 8) &&
+           r[4] > 0 && r[4] <= 0x1fff && r[0] <= r[1] &&
+           (!(r[3] & 0x10) || (r[2] >= r[0] && r[2] <= r[1])) &&
+           ((r[3] & 1) || (!(r[0] & 1) && !(r[1] & 1)));
+}
+
 /* Apple IMA4: big-endian packed predictor/index, then32low-first nibble pairs.
  * Verified against FFmpeg adpcm_ima_qt on original MJP and SF010 assets.
  * Retain predictor low bits between consistent headers as QuickTime does. */
@@ -139,7 +154,7 @@ void midi_write(Midi *m, uint32_t o, uint32_t value, uint32_t pc) {
                 m->half_phase[v] = 0;
                 m->phase[v] = 0;
                 m->ima_pos[v]=64;m->ima_valid[v]=0;
-                if (stream_supported(&m->regs[v * 16]) || music_supported(&m->regs[v * 16]) || ima_supported(&m->regs[v*16])) m->active |= bit;
+                if (stream_supported(&m->regs[v * 16]) || music_supported(&m->regs[v * 16]) || ima_supported(&m->regs[v*16]) || pcm_supported(&m->regs[v * 16])) m->active |= bit;
                 else { m->active &= ~bit; m->unsupported_starts++; }
             } else { m->requested &= ~bit; m->active &= ~bit; }
             if (m->trace) m->trace(m->trace_ctx, v, &m->regs[v * 16], pc, on);
@@ -175,7 +190,34 @@ void midi_render(Midi *m, int16_t *stereo, unsigned frames) {
             music=music_supported(r);
             ima=ima_supported(r);
             if (!music && !ima && !stream_supported(r)) {
-                m->active &= ~bit; m->unsupported_starts++; continue;
+                if (!pcm_supported(r)) {
+                    m->active &= ~bit; m->unsupported_starts++; continue;
+                }
+                /* Generic PCM: base rate * pitch/4096 against the 44100 Hz
+                 * output, as a /4096 phase step */
+                unsigned base = (r[3] & 4) ? 22050 : 11025;
+                unsigned step = (unsigned)((uint64_t)base * r[4] / 44100);
+                int eight = r[3] & 1;
+                if (!m->read_sample || !m->read_sample(m->memory_ctx, m->cursor[v], &sample)) {
+                    m->active &= ~bit; continue;
+                }
+                if (eight) sample = (int16_t)(((sample & 0xff) - 128) << 8);
+                left += (int32_t)sample * (int32_t)(r[8] & 255) / 255;
+                right += (int32_t)sample * (int32_t)((r[8] >> 8) & 255) / 255;
+                {
+                    unsigned phase = m->phase[v] + step;
+                    m->phase[v] = (uint16_t)(phase & 4095);
+                    for (; phase >= 4096; phase -= 4096) {
+                        if (m->cursor[v] + (eight ? 1u : 2u) > r[1]) {
+                            /* One-shot voices stop on their last sample, the
+                             * cursor left there: vtech-lib waits for +0x28 to
+                             * reach the end before starting the next pass */
+                            if (r[3] & 0x10) m->cursor[v] = r[2];
+                            else { m->cursor[v] = r[1]; m->active &= ~bit; break; }
+                        } else m->cursor[v] += eight ? 1 : 2;
+                    }
+                }
+                continue;
             }
             if(ima) {
                 if(m->ima_pos[v]==64 && !ima_block(m,v)) {m->active&=~bit;continue;}

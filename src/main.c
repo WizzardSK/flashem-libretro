@@ -270,6 +270,14 @@ int main(int argc, char **argv) {
             if (keys[SDL_SCANCODE_2])      buttons |= VFLASH_BTN_B;
             if (keys[SDL_SCANCODE_3])      buttons |= VFLASH_BTN_C;
             if (keys[SDL_SCANCODE_4])      buttons |= VFLASH_BTN_D;
+            /* the console's own buttons */
+            if (keys[SDL_SCANCODE_5])      buttons |= VFLASH_BTN_CON_PLAY;
+            if (keys[SDL_SCANCODE_6])      buttons |= VFLASH_BTN_CON_STOP;
+            if (keys[SDL_SCANCODE_7])      buttons |= VFLASH_BTN_CON_FORWARD;
+            if (keys[SDL_SCANCODE_8])      buttons |= VFLASH_BTN_CON_VOL_DOWN;
+            if (keys[SDL_SCANCODE_9])      buttons |= VFLASH_BTN_CON_VOL_UP;
+            if (keys[SDL_SCANCODE_HOME])   buttons |= VFLASH_BTN_CON_POWER_ON;
+            if (keys[SDL_SCANCODE_END])    buttons |= VFLASH_BTN_CON_POWER_OFF;
         }
         vflash_set_input(vf, buttons);
 
@@ -283,6 +291,17 @@ int main(int argc, char **argv) {
 
         /* Run one emulator frame */
         vflash_run_frame(vf);
+
+        /* The console's LEDs, when they change */
+        {
+            static unsigned last_leds = ~0u;
+            unsigned l = vflash_leds(vf);
+            if (l != last_leds) {
+                fprintf(stderr, "[LED] power %s, play %s\n",
+                        (l & VFLASH_LED_POWER) ? "on" : "off", (l & VFLASH_LED_PLAY) ? "on" : "off");
+                last_leds = l;
+            }
+        }
 
         /* Breakpoint check after frame */
         if (dbg_mode && vflash_bp_hit(vf)) {

@@ -15,6 +15,7 @@ HW      *hw_create(ARM9 *cpu, const uint8_t *rom, uint32_t rom_size,
                    struct CDROM *cd, uint32_t *framebuf);
 void     hw_destroy(HW *hw);
 void     hw_set_input(HW *hw, uint32_t buttons);
+unsigned hw_leds(HW *hw);
 void     hw_set_audio_sink(HW *hw, void *ctx,
                           void (*push)(void *, const int16_t *, uint32_t));
 /* One video frame's worth of emulation; stops early at a breakpoint. */

@@ -180,6 +180,11 @@ static uint32_t flashem_poll_buttons(void)
    static const struct { unsigned key; uint32_t mask; } keys[] = {
       { RETROK_1, VFLASH_BTN_A }, { RETROK_2, VFLASH_BTN_B },
       { RETROK_3, VFLASH_BTN_C }, { RETROK_4, VFLASH_BTN_D },
+      /* the console's own buttons, on keys RetroArch's hotkeys leave alone */
+      { RETROK_5, VFLASH_BTN_CON_PLAY }, { RETROK_6, VFLASH_BTN_CON_STOP },
+      { RETROK_7, VFLASH_BTN_CON_FORWARD }, { RETROK_8, VFLASH_BTN_CON_VOL_DOWN },
+      { RETROK_9, VFLASH_BTN_CON_VOL_UP }, { RETROK_HOME, VFLASH_BTN_CON_POWER_ON },
+      { RETROK_END, VFLASH_BTN_CON_POWER_OFF },
    };
    uint32_t buttons = 0;
    size_t i;
@@ -201,6 +206,34 @@ static uint32_t flashem_poll_buttons(void)
    return buttons;
 }
 
+/* The console's power and play LEDs, as LEDs 0 and 1 of RetroArch's LED
+ * driver (Settings > LEDs) and in the log, when they change */
+static void flashem_update_leds(void)
+{
+   static struct retro_led_interface led;
+   static int asked;
+   static unsigned last = ~0u;
+   unsigned l = vflash_leds(s_vf);
+
+   if (!asked)
+   {
+      asked = 1;
+      if (!environ_cb || !environ_cb(RETRO_ENVIRONMENT_GET_LED_INTERFACE, &led))
+         led.set_led_state = NULL;
+   }
+   if (l == last)
+      return;
+   if (led.set_led_state)
+   {
+      led.set_led_state(0, (l & VFLASH_LED_POWER) ? 1 : 0);
+      led.set_led_state(1, (l & VFLASH_LED_PLAY) ? 1 : 0);
+   }
+   if (log_cb)
+      log_cb(RETRO_LOG_INFO, "[flashem] LEDs: power %s, play %s\n",
+             (l & VFLASH_LED_POWER) ? "on" : "off", (l & VFLASH_LED_PLAY) ? "on" : "off");
+   last = l;
+}
+
 void retro_run(void)
 {
    uint32_t *fb;
@@ -213,6 +246,7 @@ void retro_run(void)
       input_poll_cb();
 
    vflash_set_input(s_vf, flashem_poll_buttons());
+   flashem_update_leds();
    audio = (Audio*)vflash_get_audio(s_vf);
    int accelerated = vflash_fast_booting(s_vf);
    audio_set_discard(audio, accelerated);

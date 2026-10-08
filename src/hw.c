@@ -33,6 +33,7 @@
 #define INT_VIDEO    21
 #define INT_WATCHDOG 3
 #define INT_POWER    15
+#define INT_SOUND    9
 /* Timer lines on the V.Flash: the kernel's timer ISR tests bits 5 and 6 of
  * the controller's masked status (0xDC000000), where the Nspire has 17-19. */
 static const int timer_line[3] = { 5, 6, 19 };
@@ -112,6 +113,7 @@ struct HW {
     uint32_t       cd_sectors, cd_last_lba;   /* sectors delivered (report) */
     int            lcd_busy;      /* a command list is running */
     uint64_t       lcd_done_us;   /* ... until then */
+    uint64_t       snd_timer_next_us, snd_timer_period_us;   /* see snd_timer_arm */
     GE             ge;            /* the graphics engine behind 0xA8000000 */
     int            spi_log;
     int            ser_log;
@@ -355,18 +357,24 @@ static void timer_write(HW *hw, uint32_t pa, uint32_t v) {
 
 /* ---------------------------------------------------------------- keys */
 
-/* 0x900A0018 is the key state the kernel's input driver (0x1009711C) samples,
- * active high; its menus react to bits 0, 1, 8, 16 and 24; bit 25 is power. Which physical
- * button owns which bit is not known yet, so the mapping below is provisional
- * and VFLASH_KEYS=<hex>@<from>-<to> forces raw bits over a frame range. */
+/* 0x900A0018 is the console's own buttons, active high, which the kernel's
+ * input driver (0x1009711C) samples: bit 0 volume down, 1 volume up, 8
+ * forward, 16 stop, 24 play, 25 power off (vtech-lib button.c; power on is
+ * 0x900B0014 bit 5). These used to stand in for the controller's up, down,
+ * OK, red and yellow, from before the controller was modelled; they are the
+ * console's buttons now. VFLASH_KEYS=<hex>@<from>-<to> forces raw bits over a
+ * frame range. */
+static uint32_t pad_buttons(HW *hw);
+
 static uint32_t hw_keys(HW *hw) {
-    uint32_t k = 0, in = hw->input;
-    if (in & VFLASH_BTN_UP)     k |= 1u << 0;
-    if (in & VFLASH_BTN_DOWN)   k |= 1u << 1;
-    if (in & VFLASH_BTN_ENTER)  k |= 1u << 8;
-    if (in & VFLASH_BTN_RED)    k |= 1u << 16;
-    if (in & VFLASH_BTN_YELLOW) k |= 1u << 24;
-    /* bit 25 is the power button: pressing it switches the machine off */
+    uint32_t k = 0, in = pad_buttons(hw);
+    if (in & VFLASH_BTN_CON_VOL_DOWN)  k |= 1u << 0;
+    if (in & VFLASH_BTN_CON_VOL_UP)    k |= 1u << 1;
+    if (in & VFLASH_BTN_CON_FORWARD)   k |= 1u << 8;
+    if (in & VFLASH_BTN_CON_STOP)      k |= 1u << 16;
+    if (in & VFLASH_BTN_CON_PLAY)      k |= 1u << 24;
+    /* pressing power off switches the machine off */
+    if (in & VFLASH_BTN_CON_POWER_OFF) k |= 1u << 25;
     const char *f = getenv("VFLASH_KEYS");
     if (f) {
         unsigned long bits = 0, a = 0, b = 0;
@@ -382,6 +390,7 @@ static uint32_t hw_keys(HW *hw) {
  * the PMU clock setting survive. */
 static void devices_reset(HW *hw) {
     memset(hw->tp, 0, sizeof hw->tp);
+    hw->snd_timer_period_us = 0;
     for (int i = 0; i < 3; i++)
         hw->tp[i].t[0].control = hw->tp[i].t[1].control = 0x10;
     memset(&hw->ic, 0, sizeof hw->ic);
@@ -515,7 +524,8 @@ static uint32_t pmu_read(HW *hw, uint32_t pa) {
             hw->pmu.done |= 1;
             hw->pmu.done_at = 0;
         }
-        return hw->pmu.done;
+        /* bit 5: the console's power-on button (vtech-lib button.c) */
+        return hw->pmu.done | ((pad_buttons(hw) & VFLASH_BTN_CON_POWER_ON) ? 0x20 : 0);
     case 0x18: return hw->pmu.disable;
     case 0x20: return hw->pmu.disable2;
     case 0x24: return hw->pmu.clocks;
@@ -632,7 +642,7 @@ static void pad_send(HW *hw, int u, const uint8_t *p, int n) {
     for (int i = 0; i < k; i++) uart_rx_push(hw, u, pk[i]);
 }
 
-/* The buttons the controller sees: the frontend's, plus VFLASH_INPUT=
+/* The buttons the controller and the console's keys see: the frontend's, plus VFLASH_INPUT=
  * <hex VFLASH_BTN mask>@<from>-<to>[;...] for scripted headless runs. */
 static uint32_t pad_buttons(HW *hw) {
     uint32_t in = hw->input;
@@ -1863,6 +1873,44 @@ static void ve_render(HW *hw) {
     }
 }
 
+/* The sound core's timer, 0xB0001004: bit 9 runs it, bits 31-16 are its
+ * period, and each expiry sets pending bit 1 of the six at bits 0-5 (written
+ * back as 1 to clear, midi.c), which drive IRQ 9 (0xDC000000 bit 9). The BIOS
+ * arms it with 0x00010200 and acknowledges with 2; vtech-lib's DSP timer
+ * (dsp_irq.c) re-arms it from its handler with 0x1004 |= 0x200, which writes
+ * the pending bit back and so acknowledges it too, and fctest refills its
+ * audio buffer from it (mrdudz, issue #3). The period's unit is not known:
+ * one millisecond is a guess that gives fctest's period of 8 time to refill
+ * its 46 ms buffer halves. Any write restarts the count. */
+static void snd_timer_arm(HW *hw) {
+    uint32_t r = hw->midi.regs[0x1004 / 4];
+    if ((r & 0x200) && (r >> 16)) {
+        hw->snd_timer_period_us = (uint64_t)(r >> 16) * 1000;
+        hw->snd_timer_next_us = hw_us(hw) + hw->snd_timer_period_us;
+    } else {
+        hw->snd_timer_period_us = 0;
+    }
+    int_set(hw, INT_SOUND, (r & 0x3F) != 0);
+}
+
+static void snd_timer_poll(HW *hw) {
+    if (!hw->snd_timer_period_us) return;
+    uint64_t now = hw_us(hw);
+    if (now < hw->snd_timer_next_us) return;
+    hw->midi.regs[0x1004 / 4] |= 2;
+    hw->snd_timer_next_us = now + hw->snd_timer_period_us;
+    int_set(hw, INT_SOUND, 1);
+}
+
+/* The console's LEDs (vtech-lib led.c): power on GPIO B1 bit 2, lit while
+ * the pin is low; play on GPIO A1 bit 1, lit while it is high */
+unsigned hw_leds(HW *hw) {
+    unsigned l = 0;
+    if (!(hw->gpio[1].out[1] & 0x04)) l |= VFLASH_LED_POWER;
+    if (hw->gpio[0].out[1] & 0x02) l |= VFLASH_LED_PLAY;
+    return l;
+}
+
 static void lcd_int_check(HW *hw);
 
 static void lcd_poll(HW *hw) {
@@ -1926,7 +1974,10 @@ static void mmio_wr(HW *hw, uint32_t pa, uint32_t v, int size) {
     case 0xA400: mathu_write(hw, pa, v); return;
     case 0xBC00: dmac_write(hw, pa, v); return;
     case 0xC000: zevio_dsp_dma_write(&hw->zsp, pa & 0xFFFF, v); return;
-    case 0xB000: midi_write(&hw->midi,pa & 0xFFFF,v,hw->cpu->r[15]-(hw->cpu->thumb?4:8)); return;
+    case 0xB000:
+        midi_write(&hw->midi,pa & 0xFFFF,v,hw->cpu->r[15]-(hw->cpu->thumb?4:8));
+        if ((pa & 0xFFFF) == 0x1004) snd_timer_arm(hw);
+        return;
     }
     unmodelled(hw, pa, 1, size, v);
 }
@@ -2426,6 +2477,7 @@ void hw_run_frame(HW *hw) {
         timers_run(hw, c->cycles - start);
         cd_tick(hw);
         lcd_poll(hw);
+        snd_timer_poll(hw);
         if (hw->prof_on) prof_note(hw, c->r[15]);
     }
     ve_vblank(hw);
