@@ -8,6 +8,7 @@
 typedef struct {
     uint32_t regs[MIDI_REGISTER_BYTES / 4];
     uint64_t requested, unsupported_starts;
+    uint64_t dry_voices, dry_samples, dry_ends; /* diagnostic: one-shot PCM voices ended, not yet restarted */
     uint64_t active;
     uint16_t master_level[2]; /* current stereo level, exposed at1248 */
     uint32_t cursor[MIDI_VOICES];

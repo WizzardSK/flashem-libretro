@@ -1,5 +1,6 @@
 #include "midi.h"
 #include <string.h>
+#include <stdio.h>
 
 /* Real BIOS writes captured by tools/midi_bios_probe.c. The buffers contain
  * ten CDDA sectors per planar channel; end is the final 16-bit sample address.
@@ -149,6 +150,7 @@ void midi_write(Midi *m, uint32_t o, uint32_t value, uint32_t pc) {
             unsigned v = base + n;
             uint64_t bit = UINT64_C(1) << v;
             if (on) {
+                m->dry_voices &= ~bit;
                 m->requested |= bit;
                 m->cursor[v] = m->regs[v * 16];
                 m->half_phase[v] = 0;
@@ -213,7 +215,7 @@ void midi_render(Midi *m, int16_t *stereo, unsigned frames) {
                              * cursor left there: vtech-lib waits for +0x28 to
                              * reach the end before starting the next pass */
                             if (r[3] & 0x10) m->cursor[v] = r[2];
-                            else { m->cursor[v] = r[1]; m->active &= ~bit; break; }
+                            else { m->cursor[v] = r[1]; m->active &= ~bit; m->dry_voices |= bit; m->dry_ends++; break; }
                         } else m->cursor[v] += eight ? 1 : 2;
                     }
                 }
@@ -259,6 +261,7 @@ void midi_render(Midi *m, int16_t *stereo, unsigned frames) {
             }
             else m->cursor[v] += 2;
         }
+        if (m->dry_voices) m->dry_samples++;
         /* Linear gain before final saturation is an approximation; exact
          * hardware rounding and mixer headroom still require a capture.
          * Use64-bit products:64 full-scale voices exceed32-bit here. */

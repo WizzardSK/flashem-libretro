@@ -1878,14 +1878,21 @@ static void ve_render(HW *hw) {
  * back as 1 to clear, midi.c), which drive IRQ 9 (0xDC000000 bit 9). The BIOS
  * arms it with 0x00010200 and acknowledges with 2; vtech-lib's DSP timer
  * (dsp_irq.c) re-arms it from its handler with 0x1004 |= 0x200, which writes
- * the pending bit back and so acknowledges it too, and fctest refills its
- * audio buffer from it (mrdudz, issue #3). The period's unit is not known:
- * one millisecond is a guess that gives fctest's period of 8 time to refill
- * its 46 ms buffer halves. Any write restarts the count. */
+ * the pending bit back and so acknowledges it too, and fctest, DooM and
+ * Noiz2sa refill their audio buffer from it (mrdudz, issue #3). The unit is
+ * one sample at 11025 Hz, measured rather than documented: their handler
+ * restarts the voice only when the interrupt lands in the buffer's last 16
+ * bytes, 0.73 ms at 22 kHz, which period 8 hits at this unit. At 1 ms the
+ * voice ran dry 473 times in 1400 frames of DooM, at 1/11025 s and finer
+ * never, with the same speed in SpongeBob. VFLASH_SNDTIMER_US=<us> overrides
+ * it. Any write restarts the count. */
 static void snd_timer_arm(HW *hw) {
     uint32_t r = hw->midi.regs[0x1004 / 4];
     if ((r & 0x200) && (r >> 16)) {
-        hw->snd_timer_period_us = (uint64_t)(r >> 16) * 1000;
+        static double unit = -1;
+        if (unit < 0) { const char *u = getenv("VFLASH_SNDTIMER_US"); unit = u ? atof(u) : 1e6 / 11025; }
+        hw->snd_timer_period_us = (uint64_t)((r >> 16) * unit + 0.5);
+        if (!hw->snd_timer_period_us) hw->snd_timer_period_us = 1;
         hw->snd_timer_next_us = hw_us(hw) + hw->snd_timer_period_us;
     } else {
         hw->snd_timer_period_us = 0;
@@ -2421,6 +2428,8 @@ static void exit_hook(HW *hw) {
     const char *s = getenv("VFLASH_EXIT");
     if (s && hw->frame >= strtoull(s, NULL, 10)) {
         printf("[HW] exit at frame %lu\n", (unsigned long)hw->frame);
+        printf("[SND] one-shot PCM ends %llu, samples with a voice dry before its restart %llu\n",
+               (unsigned long long)hw->midi.dry_ends, (unsigned long long)hw->midi.dry_samples);
         fflush(stdout);
         exit(0);
     }
