@@ -2,6 +2,11 @@
 
 What changed in FlashEm, newest first. Releases are builds of the libretro core and, from v0.3, of the standalone emulator too.
 
+## Unreleased
+
+- Standalone: turbo (Tab held, R3 on a gamepad) runs the emulator unthrottled, without sound (SatellaGuyAlt, #5).
+- Standalone: gamepads, laid out as the libretro core's RetroPad, and every key and gamepad binding, hotkeys included, configurable in `flashem.ini` beside the program, written with the defaults on the first start (#5).
+
 ## v0.3 - 2026-10-18
 
 - The standalone emulator is in the releases, for Linux (x86_64, aarch64), macOS (arm64) and Windows (x86_64), with SDL2 beside it on macOS and Windows (SatellaGuyAlt, #4).

@@ -2,6 +2,7 @@
 #include "debugger.h"
 #include "audio.h"
 #include "frame_pacer.h"
+#include "input_config.h"
 #include <SDL2/SDL.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -36,7 +37,8 @@ static void print_usage(const char *prog) {
         "  --quiet      Show only what the program writes to its UARTs, not the\n"
         "               emulator's log\n"
         "  --help       Show this help\n\n"
-        "Controls:\n"
+        "Controls (keyboard; rebind them, and the gamepad's, in flashem.ini beside\n"
+        "the program, written with these defaults on the first start):\n"
         "  Arrow keys   Stick\n"
         "  Z / X / C / V  Red/Yellow/Green/Blue (right/up/left/down)\n"
         "  Enter        OK\n"
@@ -46,7 +48,9 @@ static void print_usage(const char *prog) {
         "  H / B        Question/Book\n"
         "  1 - 4        A-D\n"
         "  F2           Pause/resume debugger\n"
+        "  F5           Save screenshot.bmp\n"
         "  O            Open another disc (the console restarts with it)\n"
+        "  Tab          Turbo while held (unthrottled, no sound)\n"
         "  F11          Toggle fullscreen\n"
         "  A disc image dropped on the window is opened the same way.\n"
         "  Esc          Quit\n\n"
@@ -196,13 +200,9 @@ int main(int argc, char **argv) {
 
     /* The boot ROM beside the program too (70004.bin or flashem/70004.bin),
      * for a run started from a file manager in another working directory */
-    {
-        char *base = SDL_GetBasePath();
-        if (base) {
-            vflash_set_bios_dir(base);
-            SDL_free(base);
-        }
-    }
+    char *base_dir = SDL_GetBasePath();
+    if (base_dir)
+        vflash_set_bios_dir(base_dir);
 
     /* No disc given: ask for one, unless the run is headless, under the
      * debugger or starts a program of its own */
@@ -242,6 +242,11 @@ int main(int argc, char **argv) {
         vflash_destroy(vf);
         return 1;
     }
+    /* Gamepads are optional: without the subsystem the keyboard still works */
+    if (!headless && SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) < 0)
+        fprintf(stderr, "[SDL] No gamepad support: %s\n", SDL_GetError());
+    if (!headless)
+        input_config_load(base_dir);
 
     vflash_init_audio(vf);
 
@@ -298,9 +303,11 @@ int main(int argc, char **argv) {
     FramePacer pacer;
     frame_pacer_reset(&pacer);
 
+    uint32_t hotkeys = 0, hotkeys_before = 0;
     while (running) {
         uint32_t buttons = 0;
-        int accelerated = !dbg_mode && vflash_fast_booting(vf);
+        int turbo = !dbg_mode && (hotkeys & HOTKEY_TURBO);
+        int accelerated = !dbg_mode && (vflash_fast_booting(vf) || turbo);
         audio_set_discard(audio, accelerated);
 
         /* Events */
@@ -314,77 +321,54 @@ int main(int argc, char **argv) {
                     frame_pacer_reset(&pacer);
                 SDL_free(ev.drop.file);
             }
+            input_handle_event(&ev);
             if (ev.type == SDL_KEYDOWN) {
                 switch (ev.key.keysym.sym) {
-                    case SDLK_ESCAPE: printf("[Main] ESC pressed\n"); running = 0; break;
                     case SDLK_F2:
                         if (dbg_mode) {
                             if (dbg_is_running()) dbg_pause(vf);
                             else                  dbg_resume();
                         }
                         break;
-                    case SDLK_F5: {
-                        /* Save screenshot as BMP */
-                        uint32_t *fb = vflash_get_framebuffer(vf);
-                        int sw, sh;
-                        vflash_get_screen_size(vf, &sw, &sh);
-                        SDL_Surface *surf = SDL_CreateRGBSurfaceFrom(
-                            fb, sw, sh, 32, sw*4,
-                            0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000);
-                        if (surf) {
-                            SDL_SaveBMP(surf, "screenshot.bmp");
-                            SDL_FreeSurface(surf);
-                            printf("[Main] Screenshot saved: screenshot.bmp\n");
-                        }
-                        break;
-                    }
-                    case SDLK_o:
-                        if (!headless && !dbg_mode && !program &&
-                            choose_disc(chosen, sizeof(chosen)) &&
-                            switch_disc(&vf, &audio, chosen, memcard))
-                            frame_pacer_reset(&pacer);
-                        break;
-                    case SDLK_F11:
-                        if (!headless) {
-                            fullscreen = !fullscreen;
-                            SDL_SetWindowFullscreen(win,
-                                fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
-                        }
-                        break;
                 }
             }
         }
 
-        /* Input */
-        if (!headless) {
-            const uint8_t *keys = SDL_GetKeyboardState(NULL);
-            if (keys[SDL_SCANCODE_UP])     buttons |= VFLASH_BTN_UP;
-            if (keys[SDL_SCANCODE_DOWN])   buttons |= VFLASH_BTN_DOWN;
-            if (keys[SDL_SCANCODE_LEFT])   buttons |= VFLASH_BTN_LEFT;
-            if (keys[SDL_SCANCODE_RIGHT])  buttons |= VFLASH_BTN_RIGHT;
-            if (keys[SDL_SCANCODE_Z])      buttons |= VFLASH_BTN_RED;
-            if (keys[SDL_SCANCODE_X])      buttons |= VFLASH_BTN_YELLOW;
-            if (keys[SDL_SCANCODE_C])      buttons |= VFLASH_BTN_GREEN;
-            if (keys[SDL_SCANCODE_V])      buttons |= VFLASH_BTN_BLUE;
-            if (keys[SDL_SCANCODE_RETURN]) buttons |= VFLASH_BTN_ENTER;
-            if (keys[SDL_SCANCODE_BACKSPACE]) buttons |= VFLASH_BTN_EXIT;
-            if (keys[SDL_SCANCODE_Q])      buttons |= VFLASH_BTN_L;
-            if (keys[SDL_SCANCODE_W])      buttons |= VFLASH_BTN_R;
-            if (keys[SDL_SCANCODE_SPACE])  buttons |= VFLASH_BTN_STICK;
-            if (keys[SDL_SCANCODE_H])      buttons |= VFLASH_BTN_QUESTION;
-            if (keys[SDL_SCANCODE_B])      buttons |= VFLASH_BTN_BOOK;
-            if (keys[SDL_SCANCODE_1])      buttons |= VFLASH_BTN_A;
-            if (keys[SDL_SCANCODE_2])      buttons |= VFLASH_BTN_B;
-            if (keys[SDL_SCANCODE_3])      buttons |= VFLASH_BTN_C;
-            if (keys[SDL_SCANCODE_4])      buttons |= VFLASH_BTN_D;
-            /* the console's own buttons */
-            if (keys[SDL_SCANCODE_5])      buttons |= VFLASH_BTN_CON_PLAY;
-            if (keys[SDL_SCANCODE_6])      buttons |= VFLASH_BTN_CON_STOP;
-            if (keys[SDL_SCANCODE_7])      buttons |= VFLASH_BTN_CON_FORWARD;
-            if (keys[SDL_SCANCODE_8])      buttons |= VFLASH_BTN_CON_VOL_DOWN;
-            if (keys[SDL_SCANCODE_9])      buttons |= VFLASH_BTN_CON_VOL_UP;
-            if (keys[SDL_SCANCODE_HOME])   buttons |= VFLASH_BTN_CON_POWER_ON;
-            if (keys[SDL_SCANCODE_END])    buttons |= VFLASH_BTN_CON_POWER_OFF;
+        /* Input: the bindings of flashem.ini, keyboard and gamepads */
+        hotkeys_before = hotkeys;
+        hotkeys = 0;
+        if (!headless)
+            buttons = input_poll(SDL_GetKeyboardState(NULL), &hotkeys);
+        {
+            /* Hotkeys act when pressed, not while held (turbo aside) */
+            const uint32_t pressed = hotkeys & ~hotkeys_before;
+            if (pressed & HOTKEY_QUIT) {
+                printf("[Main] Quit key pressed\n");
+                running = 0;
+            }
+            if (pressed & HOTKEY_SCREENSHOT) {
+                uint32_t *fb = vflash_get_framebuffer(vf);
+                int sw, sh;
+                vflash_get_screen_size(vf, &sw, &sh);
+                SDL_Surface *surf = SDL_CreateRGBSurfaceFrom(
+                    fb, sw, sh, 32, sw*4,
+                    0x00FF0000, 0x0000FF00, 0x000000FF, 0xFF000000);
+                if (surf) {
+                    SDL_SaveBMP(surf, "screenshot.bmp");
+                    SDL_FreeSurface(surf);
+                    printf("[Main] Screenshot saved: screenshot.bmp\n");
+                }
+            }
+            if ((pressed & HOTKEY_OPEN_DISC) && !dbg_mode && !program &&
+                choose_disc(chosen, sizeof(chosen)) &&
+                switch_disc(&vf, &audio, chosen, memcard)) {
+                frame_pacer_reset(&pacer);
+                hotkeys = 0; /* the picker had the keyboard; nothing is held now */
+            }
+            if (pressed & HOTKEY_FULLSCREEN) {
+                fullscreen = !fullscreen;
+                SDL_SetWindowFullscreen(win, fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
+            }
         }
         vflash_set_input(vf, buttons);
 
@@ -458,9 +442,9 @@ int main(int argc, char **argv) {
             }
         }
         /* Render */
-        /* Reduce rendering overhead during accelerated boot. */
+        /* Reduce rendering overhead during accelerated boot and turbo. */
         static unsigned boot_frames;
-        if (!headless && win && !(vflash_fast_booting(vf) && (boot_frames++ & 7))) {
+        if (!headless && win && !(accelerated && (boot_frames++ & 7))) {
             /* The picture size follows the machine (320x240, or 320x288 on
              * a PAL system); the texture is remade when it changes. */
             static int tex_w = VFLASH_SCREEN_W, tex_h = VFLASH_SCREEN_H;
@@ -513,6 +497,8 @@ int main(int argc, char **argv) {
     }
 
     /* Cleanup */
+    input_shutdown();
+    if (base_dir) SDL_free(base_dir);
     if (tex) SDL_DestroyTexture(tex);
     if (ren) SDL_DestroyRenderer(ren);
     if (win) SDL_DestroyWindow(win);

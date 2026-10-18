@@ -14,7 +14,7 @@ ifeq ($(OS),Windows_NT)
 	platform ?= win
 endif
 
-SRCS = src/main.c src/vflash.c src/hw.c src/arm9.c src/cp15.c src/cdrom.c src/cdsp.c src/ge.c \
+SRCS = src/main.c src/input_config.c src/vflash.c src/hw.c src/arm9.c src/cp15.c src/cdrom.c src/cdsp.c src/ge.c \
        src/audio.c src/disasm.c src/debugger.c src/zevio_dsp.c src/zsp400.c src/midi.c src/cdda_dma.c
 
 ifeq ($(platform),win)

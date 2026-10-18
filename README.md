@@ -210,10 +210,16 @@ they change.
 With RetroArch's default keyboard mapping of the RetroPad, that is: arrow keys,
 X for red, Z for yellow, S for green, A for blue, and Enter.
 
-In the standalone emulator, O opens another disc, F5 saves `screenshot.bmp`,
-F11 toggles fullscreen, and Esc quits. F2 pauses/resumes when started with `--dbg` or `--dbg-run`.
-Use a libretro frontend for host gamepad mapping. Some game prompts require a
-colour button rather than Enter.
+In the standalone emulator, Tab runs it unthrottled while held (turbo, without
+sound), O opens another disc, F5 saves `screenshot.bmp`, F11 toggles fullscreen,
+and Esc quits. F2 pauses/resumes when started with `--dbg` or `--dbg-run`.
+Some game prompts require a colour button rather than Enter.
+
+The standalone emulator also takes gamepads (SDL GameController), laid out as the
+RetroPad column above, with the left stick as the V.Flash stick too and R3 as
+turbo. Keys and gamepad buttons, hotkeys included, are rebound in `flashem.ini`
+beside the program, which it writes with the defaults on its first start; delete
+it to get them back.
 
 ## libretro core
 
