@@ -41,7 +41,9 @@ ifeq ($(platform),win)
 	LDFLAGS += $(SDL_LIBS) -lcomdlg32 -lm -mconsole -static-libgcc
 else
 	CC      = gcc
-	SDL_CFLAGS = $(shell sdl2-config --cflags)
+	# The sources include <SDL2/SDL.h>: sdl2-config names .../include/SDL2, so its
+	# parent too, which Homebrew's prefix (/opt/homebrew) is not on the default path
+	SDL_CFLAGS = $(shell sdl2-config --cflags) -I$(shell sdl2-config --prefix)/include
 	O     = .o
 	EXE   =
 	LDFLAGS += $(shell sdl2-config --libs) -lm
