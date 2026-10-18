@@ -16,16 +16,20 @@ typedef struct {
     uint32_t hotkey;      /* HOTKEY_*, or 0 */
     const char *keys;     /* default keyboard bindings (SDL key names, comma-separated) */
     const char *pad;      /* default gamepad bindings (SDL GameController names) */
+} Action;
+
+/* An action's current bindings */
+typedef struct {
     SDL_Scancode key[MAX_BINDINGS];
     int nkeys;
     int padbutton[MAX_BINDINGS]; /* SDL_GameControllerButton, or 100 + axis for a trigger */
     int npad;
-} Action;
+} Binding;
 
 /* The keyboard defaults are the ones the frontend always had. The gamepad
  * defaults follow the libretro core's RetroPad layout, by position: east red,
  * south yellow, north green, west blue, Start OK, Back Exit. */
-static Action actions[] = {
+static const Action actions[] = {
     { "up",        VFLASH_BTN_UP,     0, "Up",        "dpup" },
     { "down",      VFLASH_BTN_DOWN,   0, "Down",      "dpdown" },
     { "left",      VFLASH_BTN_LEFT,   0, "Left",      "dpleft" },
@@ -60,6 +64,8 @@ static Action actions[] = {
 };
 #define NACTIONS (sizeof(actions) / sizeof(actions[0]))
 
+static Binding bindings[NACTIONS];
+
 static SDL_GameController *pads[MAX_PADS];
 
 static char *trim(char *s) {
@@ -70,31 +76,33 @@ static char *trim(char *s) {
 }
 
 /* "Z, Return" into the action's keyboard or gamepad bindings */
-static void bind(Action *a, const char *list, int gamepad) {
+static void bind(size_t action, const char *list, int gamepad) {
+    const Action *a = &actions[action];
+    Binding *bd = &bindings[action];
     char buf[256];
     snprintf(buf, sizeof(buf), "%s", list);
-    if (gamepad) a->npad = 0; else a->nkeys = 0;
+    if (gamepad) bd->npad = 0; else bd->nkeys = 0;
     for (char *tok = strtok(buf, ","); tok; tok = strtok(NULL, ",")) {
         const char *name = trim(tok);
         if (!*name) continue;
         if (gamepad) {
-            if (a->npad >= MAX_BINDINGS) break;
+            if (bd->npad >= MAX_BINDINGS) break;
             SDL_GameControllerButton b = SDL_GameControllerGetButtonFromString(name);
             if (b != SDL_CONTROLLER_BUTTON_INVALID) {
-                a->padbutton[a->npad++] = b;
+                bd->padbutton[bd->npad++] = b;
                 continue;
             }
             SDL_GameControllerAxis ax = SDL_GameControllerGetAxisFromString(name);
             if (ax == SDL_CONTROLLER_AXIS_TRIGGERLEFT || ax == SDL_CONTROLLER_AXIS_TRIGGERRIGHT) {
-                a->padbutton[a->npad++] = 100 + ax;
+                bd->padbutton[bd->npad++] = 100 + ax;
                 continue;
             }
             fprintf(stderr, "[Input] flashem.ini: unknown gamepad button \"%s\" for %s\n", name, a->name);
         } else {
-            if (a->nkeys >= MAX_BINDINGS) break;
+            if (bd->nkeys >= MAX_BINDINGS) break;
             SDL_Scancode sc = SDL_GetScancodeFromName(name);
             if (sc != SDL_SCANCODE_UNKNOWN)
-                a->key[a->nkeys++] = sc;
+                bd->key[bd->nkeys++] = sc;
             else
                 fprintf(stderr, "[Input] flashem.ini: unknown key \"%s\" for %s\n", name, a->name);
         }
@@ -123,8 +131,8 @@ static void write_defaults(const char *path) {
 
 void input_config_load(const char *dir) {
     for (size_t i = 0; i < NACTIONS; i++) {
-        bind(&actions[i], actions[i].keys, 0);
-        bind(&actions[i], actions[i].pad, 1);
+        bind(i, actions[i].keys, 0);
+        bind(i, actions[i].pad, 1);
     }
 
     char path[1100];
@@ -156,7 +164,7 @@ void input_config_load(const char *dir) {
             fprintf(stderr, "[Input] flashem.ini: unknown action \"%s\"\n", name);
             continue;
         }
-        bind(&actions[i], value, gamepad);
+        bind(i, value, gamepad);
     }
     fclose(f);
     printf("[Input] Controls from %s\n", path);
@@ -192,12 +200,13 @@ uint32_t input_poll(const uint8_t *keyboard, uint32_t *hotkeys) {
     uint32_t buttons = 0, held = 0;
     for (size_t i = 0; i < NACTIONS; i++) {
         const Action *a = &actions[i];
+        const Binding *bd = &bindings[i];
         int on = 0;
-        for (int k = 0; keyboard && !on && k < a->nkeys; k++)
-            on = keyboard[a->key[k]];
+        for (int k = 0; keyboard && !on && k < bd->nkeys; k++)
+            on = keyboard[bd->key[k]];
         for (int p = 0; !on && p < MAX_PADS; p++)
-            for (int b = 0; pads[p] && !on && b < a->npad; b++)
-                on = pad_held(pads[p], a->padbutton[b]);
+            for (int b = 0; pads[p] && !on && b < bd->npad; b++)
+                on = pad_held(pads[p], bd->padbutton[b]);
         if (on) {
             buttons |= a->button;
             held |= a->hotkey;
