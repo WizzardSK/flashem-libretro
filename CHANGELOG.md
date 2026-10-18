@@ -1,8 +1,8 @@
 # Changelog
 
-What changed in FlashEm, newest first. Releases are builds of the libretro core and, from the release after v0.2, of the standalone emulator too.
+What changed in FlashEm, newest first. Releases are builds of the libretro core and, from v0.3, of the standalone emulator too.
 
-## Unreleased
+## v0.3 - 2026-10-18
 
 - The standalone emulator is in the releases, for Linux (x86_64, aarch64), macOS (arm64) and Windows (x86_64), with SDL2 beside it on macOS and Windows (SatellaGuyAlt, #4).
 - Standalone: with no disc on the command line it asks for one with the system's file picker; a disc dropped on the window, or chosen with O, restarts the console with that disc. The boot ROM is also looked for beside the program, and a missing one is reported in a message box rather than only on the console (#4).
