@@ -54,6 +54,8 @@ jobs:
           install: >-
             make
             mingw-w64-x86_64-gcc
+            mingw-w64-x86_64-SDL2
+            zip
 
       - name: Build the libretro core
         if: runner.os != 'Windows'
@@ -110,6 +112,59 @@ jobs:
           cp "${{ matrix.core }}" "dist/flashem_libretro_${{ matrix.name }}.${{ matrix.ext }}"
           cp flashem_libretro.info dist/ 2>/dev/null || true
 
+
+      # The standalone emulator (issue #4): the SDL2 frontend, with the SDL2
+      # library beside it on macOS and Windows, where it is not part of the
+      # system. Linux takes the distribution's libsdl2.
+      - name: SDL2 (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libsdl2-dev
+
+      - name: SDL2 (macOS)
+        if: runner.os == 'macOS'
+        run: brew install sdl2
+
+      - name: Build the standalone emulator
+        if: runner.os != 'Windows'
+        run: make flashem -j$(getconf _NPROCESSORS_ONLN)
+
+      - name: Build the standalone emulator (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: make platform=win SDL2_PREFIX= flashem.exe -j$(nproc)
+
+      - name: Stage the standalone emulator
+        if: runner.os != 'Windows'
+        run: |
+          set -e
+          mkdir -p standalone/flashem
+          cp flashem standalone/flashem/
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            # SDL2 beside the program, found through @executable_path
+            sdl=$(otool -L flashem | awk '/libSDL2/{print $1; exit}')
+            cp "$sdl" standalone/flashem/
+            name=$(basename "$sdl")
+            chmod u+w "standalone/flashem/$name"
+            install_name_tool -id "@executable_path/$name" "standalone/flashem/$name"
+            install_name_tool -change "$sdl" "@executable_path/$name" standalone/flashem/flashem
+            codesign --force -s - "standalone/flashem/$name" standalone/flashem/flashem
+            otool -L standalone/flashem/flashem
+          fi
+          (cd standalone && tar -czf "../dist/flashem-${{ matrix.name }}.tar.gz" flashem)
+
+      - name: Stage the standalone emulator (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          set -e
+          mkdir -p standalone/flashem
+          cp flashem.exe standalone/flashem/
+          # every MinGW DLL it needs (SDL2 and what SDL2 itself links)
+          for dll in $(ldd flashem.exe | awk '/\/mingw64\//{print $3}'); do
+            cp "$dll" standalone/flashem/
+          done
+          ls standalone/flashem
+          (cd standalone && zip -r "../dist/flashem-${{ matrix.name }}.zip" flashem)
 
       - uses: actions/upload-artifact@main
         with:
@@ -180,6 +235,8 @@ jobs:
             echo "Games boot to their menus and 3D gameplay renders, with movies and sound, on a model of the real hardware. Still under active reverse engineering: compatibility is not complete - see the status section in the README for where the work stands."
             echo
             echo "**libretro core** - drop \`flashem_libretro_<platform>.so\` (or \`.dylib\`, \`.dll\`) into your frontend's \`cores\` directory, and \`flashem_libretro.info\` into its \`info\` directory. On Android take the file for your device's ABI (arm64-v8a for most phones) and name it \`flashem_libretro_android.so\`. It takes \`.cue\`, \`.bin\` and \`.iso\`."
+            echo
+            echo "**Standalone** - \`flashem-<platform>\` (\`.tar.gz\`, \`.zip\` on Windows) is the emulator on its own, with SDL2. Put the boot ROM \`70004.bin\` beside \`flashem\` (\`flashem.exe\`) and start it: it asks for a disc (\`.cue\`, \`.bin\`, \`.iso\`), or takes one on the command line or dropped on its window; O opens another. Keys: arrows = stick, Z/X/C/V = red/yellow/green/blue, Enter = OK, Backspace = Exit, F11 = fullscreen, Esc = quit (\`flashem --help\` lists the rest). On Linux it needs SDL2 (\`libsdl2-2.0-0\` on Debian/Ubuntu) and, for the disc picker, zenity or kdialog."
             echo
             echo "No save states: the emulator has no serialiser yet, so rewind, run-ahead and netplay are out until it grows one."
             echo

@@ -38,7 +38,7 @@ ifeq ($(platform),win)
 	O     = .win.o
 	EXE   = .exe
 	# -mconsole: keep the console, the emulator logs to stdout
-	LDFLAGS += $(SDL_LIBS) -lm -mconsole -static-libgcc
+	LDFLAGS += $(SDL_LIBS) -lcomdlg32 -lm -mconsole -static-libgcc
 else
 	CC      = gcc
 	SDL_CFLAGS = $(shell sdl2-config --cflags)

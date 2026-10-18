@@ -1,9 +1,9 @@
 # FlashEm
 
 FlashEm is an experimental emulator for the VTech V.Flash, also sold as the
-V.Smile Pro, educational console (2006), as a libretro core. The repository also
-has an SDL2 standalone frontend, kept as a development tool (debugger, headless
-runs, screenshots); releases contain only the core.
+V.Smile Pro, educational console (2006), as a libretro core and as a standalone
+program (SDL2), which also serves as the development tool (debugger, headless
+runs, screenshots).
 
 The emulator runs the console's original boot ROM and each disc's own ARM code.
 The ROM boots µMORE, mounts the disc through the emulated CD hardware, and loads
@@ -63,6 +63,11 @@ your device `flashem_libretro_android.so`), and `flashem_libretro.info`. Put the
 directory and the info file in its `info` directory, then follow
 [Required files](#required-files).
 
+It also has the [standalone emulator](#standalone-emulator) for Linux (x86_64,
+aarch64, `.tar.gz`), macOS (arm64, `.tar.gz`, with SDL2) and Windows (x86_64,
+`.zip`, with SDL2). On Linux it uses the system's SDL2 (`libsdl2-2.0-0` on
+Debian and Ubuntu).
+
 ## Required files
 
 Supply your own **`70004.bin` boot ROM (2 MiB)** and disc image. ROMs, games, and
@@ -72,7 +77,8 @@ from the game through the emulated hardware; no separate DSP file is needed.
 The boot ROM is searched for in this order:
 
 1. `<system>/flashem/70004.bin`, then `<system>/70004.bin`, when a libretro
-   frontend supplies its system directory.
+   frontend supplies its system directory; for the standalone emulator, the
+   directory the program is in.
 2. The path in the `FLASHEM_BIOS` environment variable.
 3. `70004.bin` in the current working directory.
 
@@ -147,11 +153,17 @@ all use `.lr.o`, so run `make -f Makefile.libretro platform=<target> clean`
 before switching core target platforms. Header dependencies are only partially
 listed; use a clean rebuild after changing shared structures in headers.
 
-## Standalone frontend (development)
+## Standalone emulator
 
-The standalone frontend is for development - the debugger, headless runs and
-scripted screenshots below - and is not published in releases. With `70004.bin`
-in the current directory:
+Put `70004.bin` beside `flashem` (`flashem.exe`) and start it. With no disc on
+the command line it asks for one with the system's file picker (on Linux zenity
+or kdialog; without either, give the disc on the command line); cancelled, the
+console starts into its menu with the drive empty. A disc image dropped on the
+window, or one chosen with O, restarts the console with that disc, as when a
+disc is changed with the power off.
+
+The same program is the development frontend - the debugger, headless runs and
+scripted screenshots below:
 
 ```sh
 ./flashem "path/to/game.cue"
@@ -198,8 +210,8 @@ they change.
 With RetroArch's default keyboard mapping of the RetroPad, that is: arrow keys,
 X for red, Z for yellow, S for green, A for blue, and Enter.
 
-In the standalone frontend, F5 saves `screenshot.bmp`, F11 toggles fullscreen,
-and Esc quits. F2 pauses/resumes when started with `--dbg` or `--dbg-run`.
+In the standalone emulator, O opens another disc, F5 saves `screenshot.bmp`,
+F11 toggles fullscreen, and Esc quits. F2 pauses/resumes when started with `--dbg` or `--dbg-run`.
 Use a libretro frontend for host gamepad mapping. Some game prompts require a
 colour button rather than Enter.
 

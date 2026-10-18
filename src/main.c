@@ -8,9 +8,12 @@
 #include <string.h>
 #ifdef _WIN32
 #include <io.h>
+#include <windows.h>
+#include <commdlg.h>
 #define dup _dup
 #else
 #include <unistd.h>
+#include <sys/wait.h>
 #endif
 
 static void print_usage(const char *prog) {
@@ -18,7 +21,8 @@ static void print_usage(const char *prog) {
         "FlashEm - V.Flash emulator\n"
         "Usage: %s [options] [<disc.cue>]\n"
         "       %s [options] --load <program> [<disc.cue>]\n"
-        "With no disc the console starts into its menu, with the drive empty.\n\n"
+        "With no disc a file picker asks for one; cancelled, the console starts\n"
+        "into its menu with the drive empty.\n\n"
         "Options:\n"
         "  --dbg        Start interactive debugger (paused at boot)\n"
         "  --dbg-run    Start interactive debugger (running)\n"
@@ -42,7 +46,9 @@ static void print_usage(const char *prog) {
         "  H / B        Question/Book\n"
         "  1 - 4        A-D\n"
         "  F2           Pause/resume debugger\n"
+        "  O            Open another disc (the console restarts with it)\n"
         "  F11          Toggle fullscreen\n"
+        "  A disc image dropped on the window is opened the same way.\n"
         "  Esc          Quit\n\n"
         "Debugger commands (on stdin):\n"
         "  s [N]        step N instructions\n"
@@ -70,6 +76,72 @@ static void line_buffered(FILE *f) {
 #else
     setvbuf(f, NULL, _IOLBF, BUFSIZ);
 #endif
+}
+
+/* Ask for a disc image with the system's own file picker: the Windows common
+ * dialog, AppleScript's on macOS, zenity or kdialog elsewhere. 1 with the
+ * chosen path in out, 0 when cancelled or when there is no picker. */
+static int choose_disc(char *out, size_t size) {
+#ifdef _WIN32
+    OPENFILENAMEA ofn;
+    memset(&ofn, 0, sizeof(ofn));
+    out[0] = '\0';
+    ofn.lStructSize = sizeof(ofn);
+    ofn.lpstrFilter = "V.Flash disc (*.cue;*.bin;*.iso)\0*.cue;*.bin;*.iso\0All files\0*.*\0";
+    ofn.lpstrFile   = out;
+    ofn.nMaxFile    = (DWORD)size;
+    ofn.lpstrTitle  = "FlashEm - open a disc";
+    ofn.Flags       = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    return GetOpenFileNameA(&ofn) ? 1 : 0;
+#else
+    static const char *const pickers[] = {
+#ifdef __APPLE__
+        "osascript -e 'POSIX path of (choose file with prompt \"FlashEm - open a disc\" "
+        "of type {\"cue\", \"bin\", \"iso\"})' 2>/dev/null",
+#endif
+        "zenity --file-selection --title='FlashEm - open a disc' "
+        "--file-filter='V.Flash disc | *.cue *.CUE *.bin *.BIN *.iso *.ISO' 2>/dev/null",
+        "kdialog --title 'FlashEm - open a disc' --getopenfilename . "
+        "'*.cue *.CUE *.bin *.BIN *.iso *.ISO|V.Flash disc' 2>/dev/null",
+    };
+    for (size_t i = 0; i < sizeof(pickers) / sizeof(pickers[0]); i++) {
+        FILE *p = popen(pickers[i], "r");
+        if (!p) continue;
+        out[0] = '\0';
+        int got = fgets(out, (int)size, p) != NULL;
+        int status = pclose(p);
+        if (got) {
+            out[strcspn(out, "\r\n")] = '\0';
+            if (out[0]) return 1;
+        }
+        /* 1 is the picker's own "cancelled"; anything else (127: not
+         * installed) means try the next one */
+        if (status != -1 && WIFEXITED(status) && WEXITSTATUS(status) == 1) return 0;
+    }
+    fprintf(stderr, "[Main] no file picker (zenity or kdialog) found; give the disc on the command line\n");
+    return 0;
+#endif
+}
+
+/* The console restarted with another disc in the drive, as when a disc is
+ * changed with the power off: the memory card is written back and inserted
+ * again. 0 when the disc cannot be opened; the running console then stays. */
+static int switch_disc(VFlash **vf, Audio **audio, const char *disc_path, const char *memcard) {
+    if (memcard && !vflash_memcard_save(*vf, memcard))
+        fprintf(stderr, "[Main] could not write memory card %s\n", memcard);
+    VFlash *next = vflash_create(disc_path);
+    if (!next) {
+        fprintf(stderr, "[Main] could not open %s\n", disc_path);
+        return 0;
+    }
+    vflash_destroy(*vf);
+    *vf = next;
+    if (memcard && !vflash_memcard_load(next, memcard))
+        fprintf(stderr, "[Main] could not read memory card %s\n", memcard);
+    vflash_init_audio(next);
+    *audio = vflash_get_audio(next);
+    printf("[Main] Disc: %s\n", disc_path);
+    return 1;
 }
 
 int main(int argc, char **argv) {
@@ -122,9 +194,33 @@ int main(int argc, char **argv) {
             vflash_set_uart_output(con);
     }
 
+    /* The boot ROM beside the program too (70004.bin or flashem/70004.bin),
+     * for a run started from a file manager in another working directory */
+    {
+        char *base = SDL_GetBasePath();
+        if (base) {
+            vflash_set_bios_dir(base);
+            SDL_free(base);
+        }
+    }
+
+    /* No disc given: ask for one, unless the run is headless, under the
+     * debugger or starts a program of its own */
+    static char chosen[1024];
+    if (!disc_path && !program && !headless && !dbg_mode && choose_disc(chosen, sizeof(chosen)))
+        disc_path = chosen;
+
     /* Create emulator */
     VFlash *vf = vflash_create(disc_path);
-    if (!vf) return 1;
+    if (!vf) {
+        if (!headless)
+            SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "FlashEm",
+                disc_path ? "The boot ROM 70004.bin was not found beside FlashEm, or the disc "
+                            "image could not be opened."
+                          : "The boot ROM 70004.bin was not found. Put it beside FlashEm.",
+                NULL);
+        return 1;
+    }
     if (memcard && !vflash_memcard_load(vf, memcard)) {
         fprintf(stderr, "[Main] could not read memory card %s\n", memcard);
         vflash_destroy(vf);
@@ -213,6 +309,11 @@ int main(int argc, char **argv) {
                 printf("[Main] SDL_QUIT received, exiting\n");
                 running = 0; break;
             }
+            if (ev.type == SDL_DROPFILE) {
+                if (!dbg_mode && !program && switch_disc(&vf, &audio, ev.drop.file, memcard))
+                    frame_pacer_reset(&pacer);
+                SDL_free(ev.drop.file);
+            }
             if (ev.type == SDL_KEYDOWN) {
                 switch (ev.key.keysym.sym) {
                     case SDLK_ESCAPE: printf("[Main] ESC pressed\n"); running = 0; break;
@@ -237,6 +338,12 @@ int main(int argc, char **argv) {
                         }
                         break;
                     }
+                    case SDLK_o:
+                        if (!headless && !dbg_mode && !program &&
+                            choose_disc(chosen, sizeof(chosen)) &&
+                            switch_disc(&vf, &audio, chosen, memcard))
+                            frame_pacer_reset(&pacer);
+                        break;
                     case SDLK_F11:
                         if (!headless) {
                             fullscreen = !fullscreen;
