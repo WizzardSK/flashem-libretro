@@ -39,8 +39,17 @@ static inline int cond_ok(ARM9 *cpu, uint32_t cond) {
     return cond_tab[cond & 15] >> (CPSR >> 28) & 1;
 }
 
+/* Helpers that nearly every instruction goes through, put in place: as calls
+ * they were a large part of the interpreter's time (do_sub alone ~550M calls
+ * over SpongeBob's boot and loading screen) */
+#if defined(__GNUC__) || defined(__clang__)
+#define HOT_INLINE static inline __attribute__((always_inline))
+#else
+#define HOT_INLINE static inline
+#endif
+
 typedef struct { uint32_t v; int c; } SR;
-static SR bshift(uint32_t val, int type, int amt, int cin) {
+HOT_INLINE SR bshift(uint32_t val, int type, int amt, int cin) {
     SR r = {val, cin};
     if (!amt) return r;
     switch(type) {
@@ -57,7 +66,7 @@ static SR bshift(uint32_t val, int type, int amt, int cin) {
     return r;
 }
 
-static SR decode_shift(ARM9 *cpu, uint32_t insn) {
+HOT_INLINE SR decode_shift(ARM9 *cpu, uint32_t insn) {
     int rm=insn&0xF, type=(insn>>5)&3, amt;
     uint32_t val=cpu->r[rm];
     /* ARM spec: Rm=PC reads as inst+8 (PC is already inst+8).
@@ -70,7 +79,7 @@ static SR decode_shift(ARM9 *cpu, uint32_t insn) {
     }
     return bshift(val,type,amt,C_FLAG);
 }
-static uint32_t decode_imm(uint32_t insn){
+HOT_INLINE uint32_t decode_imm(uint32_t insn){
     uint32_t i=insn&0xFF; int rot=((insn>>8)&0xF)*2;
     return rot?(i>>rot)|(i<<(32-rot)):i;
 }
@@ -120,22 +129,22 @@ static void set_mode(ARM9 *cpu, uint32_t ncpsr){
     else CPSR=ncpsr;
 }
 
-static uint32_t do_add(ARM9 *cpu,uint32_t a,uint32_t b,int s){
+HOT_INLINE uint32_t do_add(ARM9 *cpu,uint32_t a,uint32_t b,int s){
     uint64_t r=(uint64_t)a+b; uint32_t res=(uint32_t)r;
     if(s){SET_N(res>>31);SET_Z(res==0);SET_C(r>>32);SET_V((!((a^b)>>31))&&((a^res)>>31));}
     return res;
 }
-static uint32_t do_adc(ARM9 *cpu,uint32_t a,uint32_t b,int s){
+HOT_INLINE uint32_t do_adc(ARM9 *cpu,uint32_t a,uint32_t b,int s){
     uint64_t r=(uint64_t)a+b+C_FLAG; uint32_t res=(uint32_t)r;
     if(s){SET_N(res>>31);SET_Z(res==0);SET_C(r>>32);SET_V((!((a^b)>>31))&&((a^res)>>31));}
     return res;
 }
-static uint32_t do_sub(ARM9 *cpu,uint32_t a,uint32_t b,int s){
+HOT_INLINE uint32_t do_sub(ARM9 *cpu,uint32_t a,uint32_t b,int s){
     uint64_t r=(uint64_t)a-b; uint32_t res=(uint32_t)r;
     if(s){SET_N(res>>31);SET_Z(res==0);SET_C(a>=b);SET_V(((a^b)>>31)&&((a^res)>>31));}
     return res;
 }
-static uint32_t do_sbc(ARM9 *cpu,uint32_t a,uint32_t b,int s){
+HOT_INLINE uint32_t do_sbc(ARM9 *cpu,uint32_t a,uint32_t b,int s){
     uint64_t r=(uint64_t)a-b-(1-C_FLAG); uint32_t res=(uint32_t)r;
     if(s){SET_N(res>>31);SET_Z(res==0);SET_C((uint64_t)a>=(uint64_t)b+(1-C_FLAG));SET_V(((a^b)>>31)&&((a^res)>>31));}
     return res;
