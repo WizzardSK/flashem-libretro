@@ -2,7 +2,7 @@
 
 What changed in FlashEm, newest first. Releases are builds of the libretro core and, from v0.3, of the standalone emulator too.
 
-## Unreleased
+## v0.4 - 2026-10-19
 
 - Faster: about a fifth less time per frame (SpongeBob's and Spider-Man's first 1500 frames in 101 and 99 s instead of 124 and 122 on a Snapdragon 7c). The ARM interpreter goes straight to the common instruction classes instead of testing a dozen rare encodings first, its add, subtract and shift helpers are put in place, and the frame loop no longer checks the debugger's hooks before every instruction. Emulation is unchanged: the state after those frames is the same as before (SatellaGuyAlt, #5).
 - Standalone: turbo (Tab held, R3 on a gamepad) runs the emulator unthrottled, without sound (SatellaGuyAlt, #5).
