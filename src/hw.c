@@ -2550,7 +2550,15 @@ void hw_run_frame(HW *hw) {
     while (c->cycles < end) {
         uint64_t start = c->cycles, stop = start + 256;
         if (idle_skippable(hw)) { c->cycles = stop; hw->idle_slices++; first = 0; }
+        /* The debugging hooks, looked at once a slice rather than before
+         * every instruction (only the debugger and env vars set them) */
+        const int hooks = hw->nbp || hw->puts_pc || hw->trace_left;
         while (c->cycles < stop) {
+            if (!hooks) {
+                arm9_step(c);
+                if (hw->ic.line[0] | hw->ic.line[1]) check_irq(hw);
+                continue;
+            }
             /* A breakpoint ends the frame early; the one resumed from is not
              * hit again on its first instruction. */
             if (hw->nbp && !first && at_bp(hw, c->r[15])) {

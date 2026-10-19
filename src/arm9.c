@@ -512,6 +512,29 @@ static void exec_arm(ARM9 *cpu, uint32_t insn) {
     }
     if(!cond_ok(cpu,insn>>28)) return;
 
+    /* The common classes straight away by bits 27-25, where none of the
+     * special encodings tested below in order can match but these three:
+     * MSR immediate (in 001), the undefined space and PLD (in 01x) - the
+     * same result as going down the list, without a dozen tests first
+     * for most instructions. */
+    switch((insn>>25)&7){
+    case 1:
+        if((insn&0x0FB00000)==0x03200000) break;   /* MSR immediate */
+        goto data_processing;
+    case 2: case 3:
+        if((insn&0x0E000010)==0x06000010) break;   /* undefined */
+        if((insn&0x0D70F000)==0x0550F000) return;  /* PLD */
+        goto load_store;
+    case 4:
+        goto load_store_multiple;
+    case 5: {   /* B / BL */
+        int32_t off=(int32_t)(insn<<8)>>6;
+        if(insn&(1<<24)) LR=PC-4;
+        PC=(uint32_t)((int32_t)PC+off);
+        return;
+    }
+    }
+
     /* BX Rm — Branch and Exchange (ARM→Thumb or Thumb→ARM) */
     if((insn&0x0FFFFFF0)==0x012FFF10){
         uint32_t a=cpu->r[insn&0xF];
@@ -652,6 +675,7 @@ static void exec_arm(ARM9 *cpu, uint32_t insn) {
         cpu->r[rd]=(uint32_t)(int32_t)res;
         return;
     }
+data_processing:
     if((insn&0x0C000000)==0x00000000){
         int imm=(insn>>25)&1,op=(insn>>21)&0xF,s=(insn>>20)&1;
         int rn=(insn>>16)&0xF,rd=(insn>>12)&0xF;
@@ -681,6 +705,7 @@ static void exec_arm(ARM9 *cpu, uint32_t insn) {
         if(wr){ cpu->r[rd]=res; if(rd==15){ if(s) set_mode(cpu,cpu->spsr); PC&=(CPSR&ARM9_FLAG_T)?~1u:~3u; } }
         return;
     }
+load_store:
     if((insn&0x0C000000)==0x04000000){
         int i=(insn>>25)&1,p=(insn>>24)&1,u=(insn>>23)&1,b=(insn>>22)&1;
         int w=(insn>>21)&1,l=(insn>>20)&1,rn=(insn>>16)&0xF,rd=(insn>>12)&0xF;
@@ -703,6 +728,7 @@ static void exec_arm(ARM9 *cpu, uint32_t insn) {
         if((!p||w)&&rn!=rd) cpu->r[rn]=addr;
         return;
     }
+load_store_multiple:
     if((insn&0x0E000000)==0x08000000){
         int p=(insn>>24)&1,u=(insn>>23)&1,w=(insn>>21)&1,l=(insn>>20)&1,rn=(insn>>16)&0xF;
         uint16_t rlist=insn&0xFFFF;
