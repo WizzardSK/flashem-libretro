@@ -91,8 +91,15 @@ void retro_set_environment(retro_environment_t cb)
 
    environ_cb = cb;
 
+   /* The console's language, which it keeps in its system flash (hw.c) */
+   static const struct retro_variable vars[] = {
+      { "flashem_language", "Console Language (Restart); Boot ROM's own|English (US)|English (UK)|French|Spanish|German|Dutch" },
+      { NULL, NULL },
+   };
+
    cb(RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME, &no_content);
    cb(RETRO_ENVIRONMENT_SET_CONTROLLER_INFO, (void*)ports);
+   cb(RETRO_ENVIRONMENT_SET_VARIABLES, (void*)vars);
 }
 
 void retro_set_video_refresh(retro_video_refresh_t cb) { video_cb = cb; }
@@ -345,6 +352,18 @@ bool retro_load_game(const struct retro_game_info *game)
       log_cb(RETRO_LOG_ERROR, "FlashEm: could not start '%s' - is 70004.bin in the "
              "system directory?\n", disc ? disc : "(no disc)");
       return false;
+   }
+
+   {
+      static const char *const names[][2] = {
+         { "English (US)", "en-us" }, { "English (UK)", "en-uk" }, { "French", "fr" },
+         { "Spanish", "es" }, { "German", "de" }, { "Dutch", "nl" },
+      };
+      struct retro_variable var = { "flashem_language", NULL };
+      if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
+         for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++)
+            if (!strcmp(var.value, names[i][0]))
+               vflash_set_language(s_vf, names[i][1]);
    }
 
    /* The memory card: one card, as on the console, whatever disc is in -

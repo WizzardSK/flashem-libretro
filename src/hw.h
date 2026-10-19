@@ -32,6 +32,10 @@ int      hw_load_phys(HW *hw, uint32_t pa, const uint8_t *data, uint32_t len);
 int      hw_memcard_insert(HW *hw, const uint8_t *data, uint32_t len);
 uint8_t *hw_memcard(HW *hw, uint32_t *len);
 int      hw_memcard_dirty(HW *hw, int clear);
+/* Fits the system flash with the console's settings in the given language
+ * (0x7A Dutch ... 0x7F English US, see hw.c); 0 for any other code. Before
+ * the first instruction. */
+int      hw_set_language(HW *hw, int code);
 
 /* One instruction, with interrupts and timers; returns cycles taken. */
 int      hw_step(HW *hw);

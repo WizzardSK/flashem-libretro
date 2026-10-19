@@ -104,6 +104,17 @@ int vflash_memcard_load(VFlash *vf, const char *path) {
     return ok;
 }
 
+int vflash_set_language(VFlash *vf, const char *name) {
+    static const struct { const char *name; int code; } languages[] = {
+        { "en-us", 0x7F }, { "en-uk", 0x7E }, { "fr", 0x7D },
+        { "es", 0x7C }, { "de", 0x7B }, { "nl", 0x7A },
+    };
+    if (!name || !strcmp(name, "bios")) return 1;
+    for (size_t i = 0; i < sizeof(languages) / sizeof(languages[0]); i++)
+        if (!strcmp(name, languages[i].name)) return hw_set_language(vf->hw, languages[i].code);
+    return 0;
+}
+
 int vflash_memcard_save(VFlash *vf, const char *path) {
     uint32_t len;
     uint8_t *mc = hw_memcard(vf->hw, &len);

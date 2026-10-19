@@ -4,6 +4,7 @@ What changed in FlashEm, newest first. Releases are builds of the libretro core 
 
 ## Unreleased
 
+- The console's language can be chosen: English (US), English (UK), French, Spanish, German or Dutch, kept in the console's system flash as on the real hardware. Core option Console Language, `[console] language` in `flashem.ini`, or `--language` (SatellaGuyAlt, #5).
 - Standalone: turbo (Tab held, R3 on a gamepad) runs the emulator unthrottled, without sound (SatellaGuyAlt, #5).
 - Standalone: gamepads, laid out as the libretro core's RetroPad, and every key and gamepad binding, hotkeys included, configurable in `flashem.ini` beside the program, written with the defaults on the first start (#5).
 
