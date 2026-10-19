@@ -13,6 +13,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef FLASHEM_JIT
+#include "jit.h"
+#endif
 #include <time.h>
 #ifdef _WIN32
 #include <direct.h>
@@ -108,6 +111,9 @@ void retro_init(void)
    log_cb = fallback_log;
    if (environ_cb && environ_cb(RETRO_ENVIRONMENT_GET_LOG_INTERFACE, &log))
       log_cb = log.log;
+#ifdef FLASHEM_JIT
+   log_cb(RETRO_LOG_INFO, "FlashEm: JIT %s\n", jit_probe());
+#endif
 }
 
 void retro_deinit(void)

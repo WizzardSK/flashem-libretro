@@ -110,6 +110,20 @@ endif
 OBJECTS := $(SOURCES_C:.c=.lr.o)
 CFLAGS  += -Wall -Wextra -std=gnu11 $(fpic) -I$(CORE_DIR)/src -DFLASHEM_NO_SDL
 
+# JIT=1: the ARM9 on dynarmic, built first with tools/build_dynarmic.sh into
+# DYNARMIC_BUILD; the core is then linked as C++
+LINK := $(CC)
+ifeq ($(JIT), 1)
+DYNARMIC_BUILD ?= build/dynarmic
+DYNARMIC_LIBS  := $(shell cat $(DYNARMIC_BUILD)/libs.txt 2>/dev/null)
+CXXFLAGS += -std=c++20 -O2 $(fpic) -I$(CORE_DIR)/src \
+	-I$(CORE_DIR)/external/dynarmic/src -I$(CORE_DIR)/external/dynarmic/externals/mcl/include
+CFLAGS   += -DFLASHEM_JIT
+OBJECTS  += $(CORE_DIR)/src/jit.lr.o
+LIBS     += -Wl,--start-group $(DYNARMIC_LIBS) -Wl,--end-group -static-libstdc++
+LINK     := $(CXX)
+endif
+
 all: $(TARGET)
 
 # Header dependencies, written by the compiler and read back (see Makefile).
@@ -122,11 +136,14 @@ $(TARGET): $(OBJECTS)
 	$(AR) rcs $@ $(OBJECTS)
 else
 $(TARGET): $(OBJECTS)
-	$(CC) $(fpic) $(SHARED) $(LDFLAGS) -o $@ $(OBJECTS) $(LIBS)
+	$(LINK) $(fpic) $(SHARED) $(LDFLAGS) -o $@ $(OBJECTS) $(LIBS)
 endif
 
 %.lr.o: %.c
 	$(CC) $(CFLAGS) -c -o $@ $<
+
+%.lr.o: %.cpp
+	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
 clean:
 	rm -f $(OBJECTS) $(DEPS) $(TARGET)
