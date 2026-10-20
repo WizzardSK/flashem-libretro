@@ -286,7 +286,7 @@ static void sprite(GE *g, uint32_t hdr, uint32_t pc) {
                 }
                 if (in && !da) abuf[yy * 1024 + xx] = t4444 ? (uint8_t)(c >> 16 & 31) : 0;
                 *p = blend_px(*p, c); g->pixels++;
-                watch(g, x0 + x, y0 + y, *p);
+                if (watch_x >= 0) watch(g, x0 + x, y0 + y, *p);
             }
         }
 }
@@ -496,11 +496,13 @@ static void tex_setup(GE *g) {
     if (direct) {
         uint32_t o = g->surface + (uint32_t)(g->pal_y >> 3) * 16384 + (uint32_t)(g->pal_y & 7) * 64 - RAM_BASE;
         direct = (uint64_t)o + 16384 <= g->ram_size;
-        if (direct)
-            for (int i = 0; i < n; i++) {
-                int x = g->pal_x + i;
-                memcpy(&raw[i], g->ram + o + (x >> 5) * 512 + (x & 31) * 2, 2);
-            }
+        /* a row of a tile is 32 pixels side by side: copied a run at a time */
+        for (int i = 0; direct && i < n; ) {
+            int x = g->pal_x + i, run = 32 - (x & 31);
+            if (run > n - i) run = n - i;
+            memcpy(&raw[i], g->ram + o + (x >> 5) * 512 + (x & 31) * 2, (size_t)run * 2);
+            i += run;
+        }
     }
     if (direct && n == last_n && tc.a4444 == last_4444 && !memcmp(raw, last_raw, (size_t)n * 2))
         ;   /* tc.pal still holds it */
@@ -573,7 +575,7 @@ static inline void tquad(int iu, int iv, uint32_t c[4]) {
 /* Bilinear texture lookup for triangles (VFLASH_FILTER=0 turns it off):
  * point sampling left detailed textures, like Dingo Rallye's race ground,
  * as speckle. Falls back to the nearest texel next to transparent ones. */
-static uint32_t filtered(GE *g, float fu, float fv) {
+static inline uint32_t filtered(GE *g, float fu, float fv) {
     static int on = -1;
     if (on < 0) on = !getenv("VFLASH_FILTER") || atoi(getenv("VFLASH_FILTER"));
     if (!on) return TEXEL(g, (int)fu, (int)fv);
@@ -662,6 +664,12 @@ static void raster(GE *g, V3 a, V3 b, V3 c) {
         int xs = (int)floorf(lo - 0.5f) - 1, xe = (int)ceilf(hi - 0.5f) + 1;
         if (xs < x0) xs = x0;
         if (xe > x1) xe = x1;
+        /* the row's surface memory, when px() would give every pixel of it */
+        uint8_t *row = NULL;
+        if (xs >= 0 && xe <= 1023 && y >= g->top) {
+            uint32_t o = g->surface + (uint32_t)(y >> 3) * 16384 + (uint32_t)(y & 7) * 64 - RAM_BASE;
+            if ((uint64_t)o + 16384 <= g->ram_size) row = g->ram + o;
+        }
         for (int x = xs; x <= xe; x++) {
             float px_ = (float)x + 0.5f;
             float w0 = edge(b.x, b.y, c.x, c.y, px_, py_) * rarea;
@@ -681,9 +689,10 @@ static void raster(GE *g, V3 a, V3 b, V3 c) {
                 for (int k = 0; k < 3; k++) l[k] = (w0 * la[k] + w1 * lb[k] + w2 * lc[k]) * z;
                 col = shade(col, l, z);
             }
-            uint16_t *p = px(g, x, y);
+            uint16_t *p = row ? (uint16_t *)(row + (x >> 5) * 512) + (x & 31) : px(g, x, y);
             if (p) {
-                *p = blend_px(*p, col); if (zenable) *zp = z; g->pixels++; watch(g, x, y, *p);
+                *p = blend_px(*p, col); if (zenable) *zp = z; g->pixels++;
+                if (watch_x >= 0) watch(g, x, y, *p);
                 abuf[y * 1024 + x] = g->tex_bpp && (g->tex_fmt & 0x100) ? (uint8_t)(col >> 16 & 31) : 0;
             }
         }
