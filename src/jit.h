@@ -26,6 +26,9 @@ void jit_run(struct ARM9 *cpu, uint64_t stop);
 /* Memory written behind the CPU's back (DMA, program loading): code
  * translated from it is dropped */
 void jit_note_write(uint32_t addr, size_t len);
+/* An interrupt line came up: the running code stops at the next memory
+ * access, so that it is taken there */
+void jit_interrupt(void);
 /* With VFLASH_JITSTATS, prints and resets the JIT's counters */
 void jit_stats(void);
 

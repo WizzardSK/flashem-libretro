@@ -40,13 +40,14 @@ extern "C" {
 namespace {
 
 constexpr auto HALT_FALLBACK = Dynarmic::HaltReason::UserDefined1;
+constexpr auto HALT_IRQ = Dynarmic::HaltReason::UserDefined2;
 
 struct Bridge final : Dynarmic::A32::UserCallbacks {
     ARM9 *cpu = nullptr;
     std::unique_ptr<Dynarmic::A32::Jit> jit;
     std::uint64_t budget = 0, used = 0;
     // An instruction for the interpreter, the JIT halted before it
-    bool fallback = false, svc = false;
+    bool fallback = false, svc = false, running = false;
     std::uint32_t fallback_pc = 0;
     std::size_t fallback_count = 0;
     // 64-byte lines code was translated from: games write data right next
@@ -178,6 +179,8 @@ extern "C" int jit_init(ARM9 *cpu) {
     Dynarmic::A32::UserConfig config;
     config.callbacks = b;
     config.arch_version = Dynarmic::A32::ArchVersion::v5TE;
+    // a device write that raises an interrupt stops the code right there
+    config.check_halt_on_memory_access = true;
     // CP15 is the interpreter's: tools/dynarmic.patch gives every
     // coprocessor instruction back
     // VFLASH_JITOPT=<hex> (debugging): dynarmic's optimisation flags
@@ -221,18 +224,20 @@ bool run_once(Bridge &b, ARM9 *cpu, std::uint64_t stop, bool step) {
     b.used = 0;
     b.fallback = b.svc = false;
     load_state(b);
-    b.jit->ClearHalt(HALT_FALLBACK);
+    b.jit->ClearHalt(HALT_FALLBACK | HALT_IRQ);
+    b.running = true;
     b.n_runs++;
     static const bool timed = getenv("VFLASH_JITSTATS") != nullptr;
     timespec t0, t1;
     if (timed) clock_gettime(CLOCK_MONOTONIC, &t0);
     const auto why = step ? b.jit->Step() : b.jit->Run();
+    b.running = false;
     if (timed) {
         clock_gettime(CLOCK_MONOTONIC, &t1);
         b.ns_run += (t1.tv_sec - t0.tv_sec) * 1000000000ull + t1.tv_nsec - t0.tv_nsec;
     }
     b.n_ticks += b.used;
-    if (!b.used && !b.fallback) {
+    if (!b.used && !b.fallback && !Dynarmic::Has(why, HALT_IRQ)) {
         // dynarmic stopped without running anything: let the interpreter
         // take the instruction, so that time moves on
         static int told;
@@ -392,6 +397,10 @@ extern "C" void jit_stats(void) {
            (unsigned long long)b.n_inval, (unsigned long long)b.n_clear, (unsigned long long)b.n_mem,
            (unsigned long long)b.n_ticks, (unsigned long long)(b.ns_run / 1000000));
     b.n_runs = b.n_back = b.n_code = b.n_inval = b.n_clear = b.n_mem = b.n_ticks = b.ns_run = 0;
+}
+
+extern "C" void jit_interrupt(void) {
+    if (g_bridge && g_bridge->running) g_bridge->jit->HaltExecution(HALT_IRQ);
 }
 
 extern "C" void jit_note_write(std::uint32_t pa, std::size_t len) {

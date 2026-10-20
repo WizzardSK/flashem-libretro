@@ -226,8 +226,16 @@ static int ic_current(HW *hw, int fiq) {
 /* The IRQ/FIQ outputs only change when the controller's state does, so they
  * are worked out then rather than on every instruction. */
 static void ic_recalc(HW *hw) {
+#ifdef FLASHEM_JIT
+    const int was = hw->ic.line[0] | hw->ic.line[1] << 1;
+#endif
     hw->ic.line[0] = ic_current(hw, 0) >= 0;
     hw->ic.line[1] = ic_current(hw, 1) >= 0;
+#ifdef FLASHEM_JIT
+    /* raised by the code the JIT is running (a device write): the
+     * interpreter would take it after this instruction */
+    if ((hw->ic.line[0] | hw->ic.line[1] << 1) & ~was) jit_interrupt();
+#endif
 }
 
 static void ic_update(HW *hw) {
