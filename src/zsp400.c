@@ -101,6 +101,17 @@ static void set_control(ZSP400 *s,unsigned n,uint16_t v,uint16_t *next) {
     s->c[n]=v; if(n==16) *next=v;
 }
 void zsp400_request_irq(ZSP400 *s,unsigned line) { if(line<14) s->c[9]|=1u<<line; }
+int zsp400_idle(const ZSP400 *s) {
+    if(s->fault || !(s->c[15]&0x6000) || (s->c[15]&0x8000)) return 0;
+    for(unsigned i=0;i<2;i++) if((s->c[1]>>(8*i))&128 && s->c[23+i]) return 0;
+    return !((s->c[2]&0x8000) && (s->c[9]&s->c[2]&0x3fff)) && (s->flags&4u)==(s->c[9]?4u:0);
+}
+/* The on-chip SRAM where the memory mode maps it (zevio_dsp.c core_memory) */
+static uint8_t *sram(ZSP400 *s,uint16_t a,int program) {
+    uint16_t mode=s->c[15];
+    if(program) return s->iram && a<0x4000 && (!(mode&2)||(mode&0x400)) ? s->iram+2u*a : NULL;
+    return s->dram && a<0xa000 && !(mode&1) ? s->dram+2u*a : NULL;
+}
 static void tick(ZSP400 *s) {
     for(unsigned i=0;i<2;i++) {
         unsigned t=(s->c[1]>>(8*i))&255;
@@ -131,7 +142,9 @@ int zsp400_step(ZSP400 *s) {
     if(s->fault || (s->c[15]&0x8000)) return 0;
     tick(s);
     if(s->c[15]&0x6000) return 1; /* peripheral clocks still advance */
-    uint16_t pc=s->pc, w=s->read(s->ctx,pc,1), next=pc+1;
+    uint16_t pc=s->pc, next=pc+1, w;
+    const uint8_t *ip=sram(s,pc,1);
+    w=ip ? (uint16_t)(ip[0]|ip[1]<<8) : s->read(s->ctx,pc,1);
     unsigned top=w>>12, op=(w>>8)&15, x=(w>>4)&15, y=w&15;
     uint16_t a=s->r[x], b=s->r[y];
     if(top==0) next=pc+sx(w,12);
@@ -204,7 +217,9 @@ int zsp400_step(ZSP400 *s) {
         uint16_t values[2]={s->r[x],s->r[(x+1)&15]};
         for(int i=0;i<count;++i) {
             uint16_t at=cb_end && (unsigned)addr+i>=cb_end?cb_begin+(unsigned)addr+i-cb_end:(unsigned)addr+i;
-            if(top==7) values[i]=s->read(s->ctx,at,program);
+            uint8_t *m=sram(s,at,program);
+            if(m) { if(top==7) values[i]=(uint16_t)(m[0]|m[1]<<8); else { m[0]=(uint8_t)values[i]; m[1]=(uint8_t)(values[i]>>8); } }
+            else if(top==7) values[i]=s->read(s->ctx,at,program);
             else s->write(s->ctx,at,values[i],program);
         }
         if(top==7) { s->r[x]=values[0]; if(count==2) s->r[x+1]=values[1]; }
