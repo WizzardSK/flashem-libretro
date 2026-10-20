@@ -96,6 +96,16 @@ void retro_set_environment(retro_environment_t cb)
 
    cb(RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME, &no_content);
    cb(RETRO_ENVIRONMENT_SET_CONTROLLER_INFO, (void*)ports);
+#ifdef FLASHEM_JIT
+   {
+      /* The ARM9 on dynarmic, or on the interpreter it started with */
+      static const struct retro_variable vars[] = {
+         { "flashem_cpu", "CPU Emulation (Restart); JIT|Interpreter" },
+         { NULL, NULL },
+      };
+      cb(RETRO_ENVIRONMENT_SET_VARIABLES, (void*)vars);
+   }
+#endif
 }
 
 void retro_set_video_refresh(retro_video_refresh_t cb) { video_cb = cb; }
@@ -345,6 +355,13 @@ bool retro_load_game(const struct retro_game_info *game)
       }
    }
 
+#ifdef FLASHEM_JIT
+   {
+      struct retro_variable var = { "flashem_cpu", NULL };
+      jit_enabled = !(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value
+                      && !strcmp(var.value, "Interpreter"));
+   }
+#endif
    s_vf = vflash_create(disc);
    if (!s_vf)
    {

@@ -14,6 +14,8 @@ struct ARM9;
 
 /* 1 when the core was built with dynarmic */
 int jit_available(void);
+/* 0 keeps the interpreter for the next machine made (the frontend's option) */
+extern int jit_enabled;
 /* What the JIT is, for the log */
 const char *jit_probe(void);
 

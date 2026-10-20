@@ -2398,7 +2398,7 @@ HW *hw_create(ARM9 *cpu, const uint8_t *rom, uint32_t rom_size,
 #ifdef FLASHEM_JIT
     {
         const char *j = getenv("VFLASH_JIT");
-        if (!(j && *j == '0') && jit_init(cpu)) printf("[HW] JIT: %s\n", jit_probe());
+        if (jit_enabled && !(j && *j == '0') && jit_init(cpu)) printf("[HW] JIT: %s\n", jit_probe());
     }
 #endif
     printf("[HW] Booting the ROM at 0\n");

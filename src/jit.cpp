@@ -35,12 +35,14 @@ extern "C" {
 #include <unordered_map>
 #include <utility>
 
+#include <time.h>
+#if defined(__linux__) && defined(__aarch64__)
 #include <dlfcn.h>
 #include <signal.h>
 #include <sys/syscall.h>
-#include <time.h>
 #include <ucontext.h>
 #include <unistd.h>
+#endif
 #include <array>
 #include <memory>
 #include <optional>
@@ -285,6 +287,10 @@ void store_state(Bridge &b) {
 }
 
 }  // namespace
+
+extern "C" {
+int jit_enabled = 1;
+}
 
 extern "C" int jit_available(void) { return 1; }
 
