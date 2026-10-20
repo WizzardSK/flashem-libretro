@@ -31,6 +31,7 @@ extern "C" {
 #include <ctime>
 #include <thread>
 #include <algorithm>
+#include <array>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -65,7 +66,37 @@ struct Bridge final : Dynarmic::A32::UserCallbacks {
 
     void *ctx() const { return cpu->mem_ctx; }
 
-    void mark(std::uint32_t va) { code_line[va >> LINE] = true; }
+    // dynarmic's page table: plain RAM pages without code, filled as the
+    // callbacks meet them (mem_page_rw) and emptied when the TLB changes;
+    // the rest - devices, ROM, page tables, code - goes through the callbacks
+    std::array<std::uint8_t *, Dynarmic::A32::UserConfig::NUM_PAGE_TABLE_ENTRIES> table{};
+    std::vector<std::uint32_t> filled;
+    std::vector<bool> code_page = std::vector<bool>(1u << 20);
+    std::uint32_t table_gen = 0;
+    bool use_table = false;
+
+    void clear_table() {
+        for (std::uint32_t p : filled) table[p] = nullptr;
+        filled.clear();
+        table_gen = cpu->cp15.tlb_gen;
+    }
+    void fill(std::uint32_t va) {
+        const std::uint32_t p = va >> 12;
+        if (!use_table || table[p] || code_page[p] || !cpu->mem_page_rw) return;
+        if (cpu->cp15.tlb_gen != table_gen) clear_table();
+        std::uint8_t *h = cpu->mem_page_rw(ctx(), va);
+        if (cpu->cp15.tlb_gen != table_gen) clear_table();   // the lookup flushed
+        else if (h) {
+            table[p] = h;
+            filled.push_back(p);
+        }
+    }
+
+    void mark(std::uint32_t va) {
+        code_line[va >> LINE] = true;
+        code_page[va >> 12] = true;
+        table[va >> 12] = nullptr;
+    }
     void wrote(std::uint32_t va, std::size_t len) {
         for (std::uint32_t l = va >> LINE, e = (std::uint32_t)((va + len - 1) >> LINE); l <= e; l++)
             if (code_line[l]) {
@@ -74,7 +105,10 @@ struct Bridge final : Dynarmic::A32::UserCallbacks {
                 jit->InvalidateCacheRange(l << LINE, 1u << LINE);
             }
     }
-    void forget_code() { code_line.assign(code_line.size(), false); }
+    void forget_code() {
+        code_line.assign(code_line.size(), false);
+        code_page.assign(code_page.size(), false);
+    }
 
     // The CPU's data accesses, as the interpreter makes them: ARMv5 ignores
     // the low address bits of halfword and word accesses (dynarmic passes
@@ -88,6 +122,7 @@ struct Bridge final : Dynarmic::A32::UserCallbacks {
         n_mem++;
         std::uint32_t v = size == 4 ? cpu->mem_read32(ctx(), va) : size == 2 ? cpu->mem_read16(ctx(), va) : cpu->mem_read8(ctx(), va);
         if (rec) accesses.push_back({va, v, size, false});
+        fill(va);
         return v;
     }
     void wr(std::uint32_t va, std::uint32_t v, std::uint8_t size) {
@@ -97,6 +132,9 @@ struct Bridge final : Dynarmic::A32::UserCallbacks {
         else if (size == 2) cpu->mem_write16(ctx(), va, (std::uint16_t)v);
         else cpu->mem_write8(ctx(), va, (std::uint8_t)v);
         wrote(va, size);
+        // a store to a page table flushed the TLB: the pointers may be stale
+        if (cpu->cp15.tlb_gen != table_gen) clear_table();
+        fill(va);
     }
 
     std::optional<std::uint32_t> MemoryReadCode(std::uint32_t va) override {
@@ -185,6 +223,14 @@ extern "C" int jit_init(ARM9 *cpu) {
     config.arch_version = Dynarmic::A32::ArchVersion::v5TE;
     // a device write that raises an interrupt stops the code right there
     config.check_halt_on_memory_access = true;
+    // RAM without the callbacks (not with the lockstep check, which needs
+    // to see every access); misaligned halfwords and words still take them,
+    // for ARMv5's alignment
+    b->use_table = !getenv("VFLASH_JITCHECK") && !(getenv("VFLASH_JITTABLE") && *getenv("VFLASH_JITTABLE") == '0');
+    if (b->use_table) {
+        config.page_table = &b->table;
+        config.detect_misaligned_access_via_page_table = 16 | 32 | 64;
+    }
     // CP15 is the interpreter's: tools/dynarmic.patch gives every
     // coprocessor instruction back
     // VFLASH_JITOPT=<hex> (debugging): dynarmic's optimisation flags
@@ -226,10 +272,12 @@ bool run_once(Bridge &b, ARM9 *cpu, std::uint64_t stop, bool step) {
     if (cpu->cp15.ttb != b.mmu.ttb || cpu->cp15.control != b.mmu.control
         || cpu->cp15.domain != b.mmu.domain || cpu->cp15.pid != b.mmu.pid) {
         b.mmu = cpu->cp15;
+        b.clear_table();
         b.n_clear++;
         b.jit->ClearCache();
         b.forget_code();
     }
+    if (cpu->cp15.tlb_gen != b.table_gen) b.clear_table();
     b.budget = stop > cpu->cycles ? stop - cpu->cycles : 1;
     // VFLASH_JITBUDGET=<n> (debugging): runs of at most n cycles
     static const std::uint64_t cap = getenv("VFLASH_JITBUDGET") ? strtoull(getenv("VFLASH_JITBUDGET"), nullptr, 0) : 0;

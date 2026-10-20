@@ -2212,6 +2212,15 @@ static const uint8_t *hw_mem_page(void *ctx, uint32_t va) {
     return hw->tlb[i].tag == ((va & ~0xFFFu) | 1) ? hw->tlb[i].rd : NULL;
 }
 
+/* A page loads and stores can both use directly (the JIT's page table). */
+static uint8_t *hw_mem_page_rw(void *ctx, uint32_t va) {
+    HW *hw = ctx; uint32_t pa;
+    if (!tlb_get(hw, va, &pa)) return NULL;
+    uint32_t i = va >> 12 & (TLB_SIZE - 1);
+    if (hw->tlb[i].tag != ((va & ~0xFFFu) | 1) || hw->tlb[i].rd != hw->tlb[i].wr) return NULL;
+    return hw->tlb[i].wr;
+}
+
 /* Slow-path stores check this: a CPU write into memory a walk has read
  * (a page table) drops every cached translation. */
 static inline void pt_store(HW *hw, uint32_t pa) {
@@ -2341,6 +2350,7 @@ HW *hw_create(ARM9 *cpu, const uint8_t *rom, uint32_t rom_size,
     cpu->mem_write16 = hw_write16;
     cpu->mem_write8  = hw_write8;
     cpu->mem_page    = hw_mem_page;
+    cpu->mem_page_rw = hw_mem_page_rw;
     arm9_reset(cpu);
     memset(framebuf, 0, 320 * 240 * 4);
     {

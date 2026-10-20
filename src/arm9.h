@@ -56,6 +56,10 @@ struct ARM9 {
     /* Optional: host memory behind the 4 KB page holding addr, or NULL.
      * Instruction fetches read through it while cp15.tlb_gen stays put. */
     const uint8_t *(*mem_page)(void *ctx, uint32_t addr);
+    /* Optional: host memory behind the page that loads and stores may both
+     * use directly (plain RAM, no page table, no watch), or NULL - the JIT's
+     * page table. Valid while cp15.tlb_gen stays put. */
+    uint8_t *(*mem_page_rw)(void *ctx, uint32_t addr);
     const uint8_t *fetch_ptr;
     uint32_t fetch_page, fetch_gen;
 
