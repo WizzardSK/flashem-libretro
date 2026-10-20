@@ -1,3 +1,20 @@
+diff --git a/src/dynarmic/frontend/A32/translate/impl/a32_translate_impl.cpp b/src/dynarmic/frontend/A32/translate/impl/a32_translate_impl.cpp
+index 276f8384..7cab6d26 100644
+--- a/src/dynarmic/frontend/A32/translate/impl/a32_translate_impl.cpp
++++ b/src/dynarmic/frontend/A32/translate/impl/a32_translate_impl.cpp
+@@ -29,8 +29,10 @@ bool TranslatorVisitor::VFPConditionPassed(Cond cond) {
+ }
+ 
+ bool TranslatorVisitor::InterpretThisInstruction() {
+-    ir.SetTerm(IR::Term::Interpret(ir.current_location));
+-    return false;
++    // flashem: the arm64 backend cannot emit Term::Interpret; an exception
++    // stops the run at this instruction just the same, and the host's
++    // ExceptionRaised hands it to its interpreter
++    return RaiseException(Exception::UndefinedInstruction);
+ }
+ 
+ bool TranslatorVisitor::UnpredictableInstruction() {
 diff --git a/src/dynarmic/frontend/A32/translate/impl/coprocessor.cpp b/src/dynarmic/frontend/A32/translate/impl/coprocessor.cpp
 index 29748a6e..b0fc8b26 100644
 --- a/src/dynarmic/frontend/A32/translate/impl/coprocessor.cpp
