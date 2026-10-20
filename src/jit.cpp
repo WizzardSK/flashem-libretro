@@ -75,6 +75,8 @@ struct Bridge final : Dynarmic::A32::UserCallbacks {
     // (translation), lines invalidated, full clears
     std::uint64_t n_runs = 0, n_back = 0, n_code = 0, n_inval = 0, n_clear = 0;
     std::uint64_t n_mem = 0, n_ticks = 0, ns_run = 0, ns_back = 0;
+    // VFLASH_JITSTATS: where instructions were given back (PC | Thumb)
+    std::unordered_map<std::uint32_t, std::uint64_t> back_at;
 
     void *ctx() const { return cpu->mem_ctx; }
 
@@ -407,6 +409,8 @@ bool run_once(Bridge &b, ARM9 *cpu, std::uint64_t stop, bool step) {
     b.n_back += b.fallback_count;
     // the instructions dynarmic gave back, by the interpreter
     cpu->r[15] = b.svc ? cpu->r[15] - (cpu->thumb ? 2 : 4) : b.fallback_pc;
+    static const bool stats = getenv("VFLASH_JITSTATS") != nullptr;
+    if (stats) b.back_at[cpu->r[15] | cpu->thumb]++;
     for (std::size_t i = 0; i < b.fallback_count; i++) {
         // VFLASH_JITLOG=<n>: the first n instructions given back, for debugging
         static long log_left = getenv("VFLASH_JITLOG") ? atol(getenv("VFLASH_JITLOG")) : 0;
@@ -548,6 +552,18 @@ extern "C" void jit_stats(void) {
            (unsigned long long)b.n_inval, (unsigned long long)b.n_clear, (unsigned long long)b.n_mem,
            (unsigned long long)b.n_ticks, (unsigned long long)(b.ns_run / 1000000));
     if (getenv("VFLASH_JITPROF")) prof_report();
+    {
+        std::vector<std::pair<std::uint64_t, std::uint32_t>> top;
+        for (auto &e : b.back_at) top.push_back({e.second, e.first});
+        std::sort(top.rbegin(), top.rend());
+        for (std::size_t i = 0; i < top.size() && i < 12; i++) {
+            const std::uint32_t at = top[i].second & ~1u;
+            const bool t = top[i].second & 1;
+            const std::uint32_t insn = t ? b.cpu->mem_read16(b.cpu->mem_ctx, at) : b.cpu->mem_read32(b.cpu->mem_ctx, at);
+            printf("[JIT]   given back %llu x at %08X: %0*X\n", (unsigned long long)top[i].first, at, t ? 4 : 8, insn);
+        }
+        b.back_at.clear();
+    }
     b.n_runs = b.n_back = b.n_code = b.n_inval = b.n_clear = b.n_mem = b.n_ticks = b.ns_run = 0;
 }
 
