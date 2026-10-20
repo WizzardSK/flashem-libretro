@@ -60,28 +60,48 @@ struct Bridge final : Dynarmic::A32::UserCallbacks {
             }
     }
 
+    // The CPU's data accesses, as the interpreter makes them: ARMv5 ignores
+    // the low address bits of halfword and word accesses (dynarmic passes
+    // them on), and an unaligned word load reads the aligned word, rotated.
+    // With VFLASH_JITCHECK they are also recorded for the lockstep check.
+    struct Access { std::uint32_t va; std::uint32_t v; std::uint8_t size; bool write; };
+    bool rec = false;
+    std::vector<Access> accesses;
+
+    std::uint32_t rd(std::uint32_t va, std::uint8_t size) {
+        std::uint32_t v = size == 4 ? cpu->mem_read32(ctx(), va) : size == 2 ? cpu->mem_read16(ctx(), va) : cpu->mem_read8(ctx(), va);
+        if (rec) accesses.push_back({va, v, size, false});
+        return v;
+    }
+    void wr(std::uint32_t va, std::uint32_t v, std::uint8_t size) {
+        if (rec) accesses.push_back({va, v, size, true});
+        if (size == 4) cpu->mem_write32(ctx(), va, v);
+        else if (size == 2) cpu->mem_write16(ctx(), va, (std::uint16_t)v);
+        else cpu->mem_write8(ctx(), va, (std::uint8_t)v);
+        wrote(va, size);
+    }
+
     std::optional<std::uint32_t> MemoryReadCode(std::uint32_t va) override {
         mark(va);
-        return cpu->mem_read32(ctx(), va);
+        return cpu->mem_read32(ctx(), va & ~3u);
     }
-    std::uint8_t MemoryRead8(std::uint32_t va) override { return cpu->mem_read8(ctx(), va); }
-    std::uint16_t MemoryRead16(std::uint32_t va) override { return cpu->mem_read16(ctx(), va); }
-    // ARMv5: an unaligned word load reads the aligned word, rotated
+    std::uint8_t MemoryRead8(std::uint32_t va) override { return (std::uint8_t)rd(va, 1); }
+    std::uint16_t MemoryRead16(std::uint32_t va) override { return (std::uint16_t)rd(va & ~1u, 2); }
     std::uint32_t MemoryRead32(std::uint32_t va) override {
-        std::uint32_t v = cpu->mem_read32(ctx(), va);
+        std::uint32_t v = rd(va & ~3u, 4);
         unsigned rot = (va & 3) * 8;
         return rot ? (v >> rot) | (v << (32 - rot)) : v;
     }
     std::uint64_t MemoryRead64(std::uint32_t va) override {
-        return cpu->mem_read32(ctx(), va) | (std::uint64_t)cpu->mem_read32(ctx(), va + 4) << 32;
+        std::uint64_t lo = rd(va & ~3u, 4);
+        return lo | (std::uint64_t)rd((va & ~3u) + 4, 4) << 32;
     }
-    void MemoryWrite8(std::uint32_t va, std::uint8_t v) override { cpu->mem_write8(ctx(), va, v); wrote(va, 1); }
-    void MemoryWrite16(std::uint32_t va, std::uint16_t v) override { cpu->mem_write16(ctx(), va, v); wrote(va, 2); }
-    void MemoryWrite32(std::uint32_t va, std::uint32_t v) override { cpu->mem_write32(ctx(), va, v); wrote(va, 4); }
+    void MemoryWrite8(std::uint32_t va, std::uint8_t v) override { wr(va, v, 1); }
+    void MemoryWrite16(std::uint32_t va, std::uint16_t v) override { wr(va & ~1u, v, 2); }
+    void MemoryWrite32(std::uint32_t va, std::uint32_t v) override { wr(va & ~3u, v, 4); }
     void MemoryWrite64(std::uint32_t va, std::uint64_t v) override {
-        cpu->mem_write32(ctx(), va, (std::uint32_t)v);
-        cpu->mem_write32(ctx(), va + 4, (std::uint32_t)(v >> 32));
-        wrote(va, 8);
+        wr(va & ~3u, (std::uint32_t)v, 4);
+        wr((va & ~3u) + 4, (std::uint32_t)(v >> 32), 4);
     }
 
     void give_back(std::uint32_t pc, std::size_t count) {
@@ -158,27 +178,20 @@ extern "C" void jit_shutdown(void) {
 
 extern "C" int jit_active(void) { return g_bridge != nullptr; }
 
-extern "C" void jit_run(ARM9 *cpu, std::uint64_t stop) {
-    Bridge &b = *g_bridge;
-    if (cpu->cycles >= stop) return;
-    // VFLASH_JITFLUSH (debugging): 1 drops all translated code before every
-    // run, 2 whenever the TLB was flushed or a page table written
-    static const int flush = getenv("VFLASH_JITFLUSH") ? atoi(getenv("VFLASH_JITFLUSH")) : 0;
-    static std::uint32_t flush_gen;
-    if (flush == 1 || (flush == 2 && cpu->cp15.tlb_gen != flush_gen)) {
-        flush_gen = cpu->cp15.tlb_gen;
-        b.jit->ClearCache();
-        std::fill(b.code_page.begin(), b.code_page.end(), 0);
-    }
-    b.budget = stop - cpu->cycles;
+namespace {
+
+// One run of dynarmic - or with step, one instruction - and the
+// instructions it gave back; true if it gave any back
+bool run_once(Bridge &b, ARM9 *cpu, std::uint64_t stop, bool step) {
+    b.budget = stop > cpu->cycles ? stop - cpu->cycles : 1;
     b.used = 0;
     b.fallback = b.svc = false;
     load_state(b);
     b.jit->ClearHalt(HALT_FALLBACK);
-    b.jit->Run();
+    if (step) b.jit->Step(); else b.jit->Run();
     store_state(b);
     cpu->cycles += b.used;
-    if (!b.fallback) return;
+    if (!b.fallback) return false;
     // the instructions dynarmic gave back, by the interpreter; an MMU change
     // among them means the code cache is translated by stale mappings
     const CP15 mmu = cpu->cp15;
@@ -203,6 +216,113 @@ extern "C" void jit_run(ARM9 *cpu, std::uint64_t stop) {
         b.jit->ClearCache();
         std::fill(b.code_page.begin(), b.code_page.end(), 0);
     }
+    return true;
+}
+
+/* VFLASH_JITCHECK=<n> (debugging): dynarmic runs one instruction at a time,
+ * each also run by the interpreter on a copy of the state before it, with
+ * its loads answered from what dynarmic read; the first n differences in
+ * registers, flags or memory accesses are printed. */
+struct Replay {
+    Bridge *b;
+    ARM9 *real;
+    std::size_t next;
+    std::uint32_t fetch_pc;
+    bool fetched, bad;
+};
+Replay g_replay;
+
+std::uint32_t replay_rd(void *ctx, std::uint32_t va, std::uint8_t size) {
+    Replay &r = *(Replay *)ctx;
+    if (!r.fetched && va == (r.fetch_pc & (size == 4 ? ~3u : ~1u))) {   // the instruction fetch
+        r.fetched = true;
+        return size == 4 ? r.real->mem_read32(r.real->mem_ctx, va) : r.real->mem_read16(r.real->mem_ctx, va);
+    }
+    auto &acc = r.b->accesses;
+    if (r.next >= acc.size() || acc[r.next].write || acc[r.next].va != va || acc[r.next].size != size) {
+        if (!r.bad) printf("[JITCHECK]   interpreter reads %u at %08X, dynarmic's access #%zu %s\n", size, va, r.next,
+                           r.next < acc.size() ? "differs" : "missing");
+        r.bad = true;
+        return r.next < acc.size() ? acc[r.next++].v : 0;
+    }
+    return acc[r.next++].v;
+}
+void replay_wr(void *ctx, std::uint32_t va, std::uint32_t v, std::uint8_t size) {
+    Replay &r = *(Replay *)ctx;
+    auto &acc = r.b->accesses;
+    if (r.next >= acc.size() || !acc[r.next].write || acc[r.next].va != va || acc[r.next].size != size || acc[r.next].v != v) {
+        if (!r.bad) printf("[JITCHECK]   interpreter writes %u at %08X = %08X, dynarmic's access #%zu %s\n", size, va, v, r.next,
+                           r.next < acc.size() ? "differs" : "missing");
+        r.bad = true;
+    }
+    r.next++;
+}
+std::uint32_t replay_r32(void *c, std::uint32_t a) { return replay_rd(c, a, 4); }
+std::uint16_t replay_r16(void *c, std::uint32_t a) { return (std::uint16_t)replay_rd(c, a, 2); }
+std::uint8_t replay_r8(void *c, std::uint32_t a) { return (std::uint8_t)replay_rd(c, a, 1); }
+void replay_w32(void *c, std::uint32_t a, std::uint32_t v) { replay_wr(c, a, v, 4); }
+void replay_w16(void *c, std::uint32_t a, std::uint16_t v) { replay_wr(c, a, v, 2); }
+void replay_w8(void *c, std::uint32_t a, std::uint8_t v) { replay_wr(c, a, v, 1); }
+
+void check_step(Bridge &b, ARM9 *cpu, std::uint64_t stop, long &left) {
+    ARM9 pre = *cpu;
+    b.rec = true;
+    b.accesses.clear();
+    bool gave_back = run_once(b, cpu, stop, true);
+    b.rec = false;
+    if (gave_back) return;
+    ARM9 sh = pre;
+    Replay &r = g_replay;
+    r = Replay{&b, cpu, 0, pre.r[15], false, false};
+    sh.mem_ctx = &r;
+    sh.mem_read32 = replay_r32; sh.mem_read16 = replay_r16; sh.mem_read8 = replay_r8;
+    sh.mem_write32 = replay_w32; sh.mem_write16 = replay_w16; sh.mem_write8 = replay_w8;
+    sh.mem_page = nullptr; sh.fetch_ptr = nullptr;
+    std::uint32_t insn = pre.thumb ? cpu->mem_read16(cpu->mem_ctx, pre.r[15] & ~1u) : cpu->mem_read32(cpu->mem_ctx, pre.r[15] & ~3u);
+    arm9_step(&sh);
+    // Thumb BL/BLX is two instructions to the interpreter, one to dynarmic
+    if (pre.thumb && (insn & 0xF800) == 0xF000 && sh.r[15] == pre.r[15] + 2) {
+        r.fetch_pc = sh.r[15];
+        r.fetched = false;
+        arm9_step(&sh);
+    }
+    bool diff = r.bad || r.next != b.accesses.size() || sh.cpsr != cpu->cpsr
+                || std::memcmp(sh.r, cpu->r, sizeof sh.r) || std::memcmp(sh.vfp_s, cpu->vfp_s, sizeof sh.vfp_s);
+    if (!diff) return;
+    left--;
+    printf("[JITCHECK] %08X %0*X cpsr %08X cyc %llu: %zu accesses by dynarmic, interpreter used %zu\n",
+           pre.r[15], pre.thumb ? 4 : 8, insn, pre.cpsr, (unsigned long long)pre.cycles, b.accesses.size(), r.next);
+    for (int i = 0; i < 16; i++)
+        if (sh.r[i] != cpu->r[i] || pre.r[i] != cpu->r[i])
+            printf("[JITCHECK]   r%-2d %08X -> dynarmic %08X interpreter %08X%s\n", i, pre.r[i], cpu->r[i], sh.r[i],
+                   sh.r[i] != cpu->r[i] ? "  <--" : "");
+    if (sh.cpsr != cpu->cpsr) printf("[JITCHECK]   cpsr -> dynarmic %08X interpreter %08X\n", cpu->cpsr, sh.cpsr);
+    for (std::size_t i = 0; i < b.accesses.size(); i++)
+        printf("[JITCHECK]   #%zu %s%u %08X %08X\n", i, b.accesses[i].write ? "w" : "r", b.accesses[i].size,
+               b.accesses[i].va, b.accesses[i].v);
+    fflush(stdout);
+}
+
+}  // namespace
+
+extern "C" void jit_run(ARM9 *cpu, std::uint64_t stop) {
+    Bridge &b = *g_bridge;
+    if (cpu->cycles >= stop) return;
+    // VFLASH_JITFLUSH (debugging): 1 drops all translated code before every
+    // run, 2 whenever the TLB was flushed or a page table written
+    static const int flush = getenv("VFLASH_JITFLUSH") ? atoi(getenv("VFLASH_JITFLUSH")) : 0;
+    static std::uint32_t flush_gen;
+    if (flush == 1 || (flush == 2 && cpu->cp15.tlb_gen != flush_gen)) {
+        flush_gen = cpu->cp15.tlb_gen;
+        b.jit->ClearCache();
+        std::fill(b.code_page.begin(), b.code_page.end(), 0);
+    }
+    static long check_left = getenv("VFLASH_JITCHECK") ? atol(getenv("VFLASH_JITCHECK")) : 0;
+    if (check_left > 0) {
+        while (cpu->cycles < stop && check_left > 0) check_step(b, cpu, stop, check_left);
+        return;
+    }
+    run_once(b, cpu, stop, false);
 }
 
 extern "C" void jit_note_write(std::uint32_t pa, std::size_t len) {
