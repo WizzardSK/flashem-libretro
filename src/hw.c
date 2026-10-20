@@ -225,8 +225,10 @@ static void unmodelled(HW *hw, uint32_t pa, int w, int size, uint32_t v) {
 static int ic_current(HW *hw, int fiq) {
     uint32_t m = hw->ic.status & hw->ic.mask[fiq];
     int limit = hw->ic.limit[fiq], cur = -1;
-    for (int i = 0; i < 32; i++)
-        if ((m >> i & 1) && hw->ic.prio[i] < limit) { cur = i; limit = hw->ic.prio[i]; }
+    for (; m; m &= m - 1) {   /* the pending lines only, lowest first */
+        int i = __builtin_ctz(m);
+        if (hw->ic.prio[i] < limit) { cur = i; limit = hw->ic.prio[i]; }
+    }
     return cur;
 }
 
@@ -255,7 +257,10 @@ static void ic_update(HW *hw) {
 }
 
 static void int_set(HW *hw, int n, int on) {
-    if (on) hw->ic.active |= 1u << n; else hw->ic.active &= ~(1u << n);
+    /* devices report their level every slice; only a change moves anything */
+    uint32_t active = on ? hw->ic.active | 1u << n : hw->ic.active & ~(1u << n);
+    if (active == hw->ic.active) return;
+    hw->ic.active = active;
     ic_update(hw);
 }
 
