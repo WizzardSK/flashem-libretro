@@ -508,6 +508,9 @@ static void misc_write(HW *hw, uint32_t pa, uint32_t v) {
          * sends it down the warm-boot path instead of recalibrating SDRAM. */
         printf("[HW] soft reset via 0x900A0008 (RTC[0x88]=%08X)\n", hw->rtc_regs[0x88 >> 2]);
         hw_soft_reset(hw);
+#ifdef FLASHEM_JIT
+        jit_reset();
+#endif
         return;
     case 0x0C: hw->boot_status = v; return;
     /* +0x2C is the fast pair's status (the ISR acknowledges it by writing

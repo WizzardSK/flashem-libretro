@@ -42,13 +42,14 @@ namespace {
 
 constexpr auto HALT_FALLBACK = Dynarmic::HaltReason::UserDefined1;
 constexpr auto HALT_IRQ = Dynarmic::HaltReason::UserDefined2;
+constexpr auto HALT_RESET = Dynarmic::HaltReason::UserDefined3;
 
 struct Bridge final : Dynarmic::A32::UserCallbacks {
     ARM9 *cpu = nullptr;
     std::unique_ptr<Dynarmic::A32::Jit> jit;
     std::uint64_t budget = 0, used = 0;
     // An instruction for the interpreter, the JIT halted before it
-    bool fallback = false, svc = false, running = false;
+    bool fallback = false, svc = false, running = false, reset = false;
     // the MMU state the code cache was translated under
     CP15 mmu{};
     std::uint32_t fallback_pc = 0;
@@ -236,7 +237,8 @@ bool run_once(Bridge &b, ARM9 *cpu, std::uint64_t stop, bool step) {
     b.used = 0;
     b.fallback = b.svc = false;
     load_state(b);
-    b.jit->ClearHalt(HALT_FALLBACK | HALT_IRQ);
+    b.jit->ClearHalt(HALT_FALLBACK | HALT_IRQ | HALT_RESET);
+    b.reset = false;
     b.running = true;
     b.n_runs++;
     static const bool timed = getenv("VFLASH_JITSTATS") != nullptr;
@@ -244,6 +246,10 @@ bool run_once(Bridge &b, ARM9 *cpu, std::uint64_t stop, bool step) {
     if (timed) clock_gettime(CLOCK_MONOTONIC, &t0);
     const auto why = step ? b.jit->Step() : b.jit->Run();
     b.running = false;
+    if (b.reset) {   // the CPU's state is the reset's, nothing to take back
+        cpu->cycles += b.used;
+        return true;
+    }
     if (timed) {
         clock_gettime(CLOCK_MONOTONIC, &t1);
         b.ns_run += (t1.tv_sec - t0.tv_sec) * 1000000000ull + t1.tv_nsec - t0.tv_nsec;
@@ -405,6 +411,13 @@ extern "C" void jit_stats(void) {
 
 extern "C" void jit_interrupt(void) {
     if (g_bridge && g_bridge->running) g_bridge->jit->HaltExecution(HALT_IRQ);
+}
+
+extern "C" void jit_reset(void) {
+    if (g_bridge && g_bridge->running) {
+        g_bridge->reset = true;
+        g_bridge->jit->HaltExecution(HALT_RESET);
+    }
 }
 
 extern "C" void jit_note_write(std::uint32_t pa, std::size_t len) {
