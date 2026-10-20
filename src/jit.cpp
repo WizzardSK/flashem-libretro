@@ -23,6 +23,8 @@ extern "C" {
 }
 
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <algorithm>
 #include <memory>
@@ -172,7 +174,21 @@ extern "C" void jit_run(ARM9 *cpu, std::uint64_t stop) {
     // among them means the code cache is translated by stale mappings
     const CP15 mmu = cpu->cp15;
     cpu->r[15] = b.svc ? cpu->r[15] - (cpu->thumb ? 2 : 4) : b.fallback_pc;
-    for (std::size_t i = 0; i < b.fallback_count; i++) arm9_step(cpu);
+    for (std::size_t i = 0; i < b.fallback_count; i++) {
+        // VFLASH_JITLOG=<n>: the first n instructions given back, for debugging
+        static long log_left = getenv("VFLASH_JITLOG") ? atol(getenv("VFLASH_JITLOG")) : 0;
+        if (log_left > 0) {
+            log_left--;
+            std::uint32_t at = cpu->r[15], cpsr = cpu->cpsr;
+            std::uint32_t insn = cpu->thumb ? cpu->mem_read16(cpu->mem_ctx, at) : cpu->mem_read32(cpu->mem_ctx, at);
+            arm9_step(cpu);
+            printf("[JIT] %s %08X %08X cpsr %08X -> pc %08X cpsr %08X sp %08X lr %08X cyc %llu\n",
+                   b.svc ? "svc" : "int", at, insn, cpsr, cpu->r[15], cpu->cpsr, cpu->r[13], cpu->r[14],
+                   (unsigned long long)cpu->cycles);
+            continue;
+        }
+        arm9_step(cpu);
+    }
     if (cpu->cp15.ttb != mmu.ttb || cpu->cp15.control != mmu.control
         || cpu->cp15.domain != mmu.domain || cpu->cp15.pid != mmu.pid) {
         b.jit->ClearCache();
