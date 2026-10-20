@@ -26,7 +26,9 @@ extern "C" {
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <chrono>
 #include <ctime>
+#include <thread>
 #include <algorithm>
 #include <memory>
 #include <optional>
@@ -180,6 +182,20 @@ extern "C" int jit_init(ARM9 *cpu) {
         config.optimizations = static_cast<Dynarmic::OptimizationFlag>(strtoul(getenv("VFLASH_JITOPT"), nullptr, 16));
     b->jit = std::make_unique<Dynarmic::A32::Jit>(config);
     g_bridge = b;
+    // VFLASH_JITSTATS also line-buffers the log and has a thread report
+    // every 5 s where the CPU is, which shows a hang inside a frame
+    if (getenv("VFLASH_JITSTATS")) {
+        setvbuf(stdout, nullptr, _IOLBF, 0);
+        std::thread([cpu] {
+            for (;;) {
+                std::this_thread::sleep_for(std::chrono::seconds(5));
+                Bridge *b = g_bridge;
+                if (!b) return;
+                printf("[JIT] watchdog: pc %08X cpsr %08X cycles %llu runs %llu ticks %llu\n", cpu->r[15], cpu->cpsr,
+                       (unsigned long long)cpu->cycles, (unsigned long long)b->n_runs, (unsigned long long)b->n_ticks);
+            }
+        }).detach();
+    }
     return 1;
 }
 
