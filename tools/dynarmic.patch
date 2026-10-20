@@ -1,3 +1,20 @@
+diff --git a/src/dynarmic/backend/arm64/emit_arm64_a32.cpp b/src/dynarmic/backend/arm64/emit_arm64_a32.cpp
+index 909dde73..dfc3ba89 100644
+--- a/src/dynarmic/backend/arm64/emit_arm64_a32.cpp
++++ b/src/dynarmic/backend/arm64/emit_arm64_a32.cpp
+@@ -170,8 +170,10 @@ void EmitA32CheckMemoryAbort(oaknut::CodeGenerator& code, EmitContext& ctx, IR::
+ 
+     const A32::LocationDescriptor current_location{IR::LocationDescriptor{inst->GetArg(0).GetU64()}};
+ 
+-    code.LDAR(Xscratch0, Xhalt);
+-    code.TST(Xscratch0, static_cast<u32>(HaltReason::MemoryAbort));
++    // flashem: the halt reason is 32 bits and only 4-byte aligned; a 64-bit
++    // LDAR of it takes an alignment fault (SIGBUS)
++    code.LDAR(Wscratch0, Xhalt);
++    code.TST(Wscratch0, static_cast<u32>(HaltReason::MemoryAbort));
+     code.B(EQ, end);
+     EmitSetUpperLocationDescriptor(code, ctx, current_location, ctx.block.Location());
+     code.MOV(Wscratch0, current_location.PC());
 diff --git a/src/dynarmic/frontend/A32/translate/impl/a32_translate_impl.cpp b/src/dynarmic/frontend/A32/translate/impl/a32_translate_impl.cpp
 index 276f8384..7cab6d26 100644
 --- a/src/dynarmic/frontend/A32/translate/impl/a32_translate_impl.cpp
