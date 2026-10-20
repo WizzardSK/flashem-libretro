@@ -154,8 +154,10 @@ static void core_write(void *ctx,uint16_t a,uint16_t v,int program) {
 void zevio_dsp_run(ZevioDSP *z,uint64_t budget) {
     if(!z->running) return;
     while(budget) {
-        uint64_t slept=zsp400_sleep(&z->core,budget);   /* asleep: timers only */
-        if(slept) { budget-=slept; continue; }
+        if(z->core.c[15]&0x6000) {   /* asleep: timers only */
+            uint64_t slept=zsp400_sleep(&z->core,budget);
+            if(slept) { budget-=slept; continue; }
+        }
         if(!zsp400_step(&z->core)) break;
         budget--;
     }
