@@ -12,7 +12,7 @@
  *
  * Memory goes through the same callbacks as the interpreter's (hw.c), with
  * ARMv5's word load rotation done here. Code is cached by virtual address;
- * a page the JIT read code from is marked, and a write to it - by the CPU,
+ * a 64-byte line the JIT read code from is marked, and a write to it - by the CPU,
  * or DMA and program loading through jit_note_write (by physical address,
  * the kernel mapping RAM one to one) - drops what was translated from it.
  * A change of the MMU's table or control register drops everything. */
@@ -49,24 +49,27 @@ struct Bridge final : Dynarmic::A32::UserCallbacks {
     bool fallback = false, svc = false;
     std::uint32_t fallback_pc = 0;
     std::size_t fallback_count = 0;
-    // 4 KB pages code was translated from
-    std::vector<std::uint8_t> code_page = std::vector<std::uint8_t>(1u << 20);
+    // 64-byte lines code was translated from: games write data right next
+    // to their code, and a page at a time retranslated a loop on every store
+    static constexpr int LINE = 6;
+    std::vector<bool> code_line = std::vector<bool>(1u << (32 - LINE));
     // VFLASH_JITSTATS: runs, instructions given back, code words read
-    // (translation), pages invalidated, full clears
+    // (translation), lines invalidated, full clears
     std::uint64_t n_runs = 0, n_back = 0, n_code = 0, n_inval = 0, n_clear = 0;
     std::uint64_t n_mem = 0, n_ticks = 0, ns_run = 0, ns_back = 0;
 
     void *ctx() const { return cpu->mem_ctx; }
 
-    void mark(std::uint32_t va) { code_page[va >> 12] = 1; }
+    void mark(std::uint32_t va) { code_line[va >> LINE] = true; }
     void wrote(std::uint32_t va, std::size_t len) {
-        for (std::uint32_t p = va >> 12, e = (std::uint32_t)((va + len - 1) >> 12); p <= e; p++)
-            if (code_page[p]) {
-                code_page[p] = 0;
+        for (std::uint32_t l = va >> LINE, e = (std::uint32_t)((va + len - 1) >> LINE); l <= e; l++)
+            if (code_line[l]) {
+                code_line[l] = false;
                 n_inval++;
-                jit->InvalidateCacheRange(p << 12, 4096);
+                jit->InvalidateCacheRange(l << LINE, 1u << LINE);
             }
     }
+    void forget_code() { code_line.assign(code_line.size(), false); }
 
     // The CPU's data accesses, as the interpreter makes them: ARMv5 ignores
     // the low address bits of halfword and word accesses (dynarmic passes
@@ -266,7 +269,7 @@ bool run_once(Bridge &b, ARM9 *cpu, std::uint64_t stop, bool step) {
         || cpu->cp15.domain != mmu.domain || cpu->cp15.pid != mmu.pid) {
         b.n_clear++;
         b.jit->ClearCache();
-        std::fill(b.code_page.begin(), b.code_page.end(), 0);
+        b.forget_code();
     }
     return true;
 }
@@ -367,7 +370,7 @@ extern "C" void jit_run(ARM9 *cpu, std::uint64_t stop) {
     if (flush == 1 || (flush == 2 && cpu->cp15.tlb_gen != flush_gen)) {
         flush_gen = cpu->cp15.tlb_gen;
         b.jit->ClearCache();
-        std::fill(b.code_page.begin(), b.code_page.end(), 0);
+        b.forget_code();
     }
     static long check_left = getenv("VFLASH_JITCHECK") ? atol(getenv("VFLASH_JITCHECK")) : 0;
     if (check_left > 0) {
@@ -381,7 +384,7 @@ extern "C" void jit_stats(void) {
     static const bool on = getenv("VFLASH_JITSTATS") != nullptr;
     if (!g_bridge || !on) return;
     Bridge &b = *g_bridge;
-    printf("[JIT] runs %llu, given back %llu, code words read %llu, pages invalidated %llu, clears %llu, "
+    printf("[JIT] runs %llu, given back %llu, code words read %llu, lines invalidated %llu, clears %llu, "
            "memory accesses %llu, cycles %llu, %llu ms in Run\n",
            (unsigned long long)b.n_runs, (unsigned long long)b.n_back, (unsigned long long)b.n_code,
            (unsigned long long)b.n_inval, (unsigned long long)b.n_clear, (unsigned long long)b.n_mem,
