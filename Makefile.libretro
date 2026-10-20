@@ -120,7 +120,7 @@ CXXFLAGS += -std=c++20 -O2 $(fpic) -I$(CORE_DIR)/src \
 	-I$(CORE_DIR)/external/dynarmic/src -I$(CORE_DIR)/external/dynarmic/externals/mcl/include
 CFLAGS   += -DFLASHEM_JIT
 OBJECTS  += $(CORE_DIR)/src/jit.lr.o
-LIBS     += -Wl,--start-group $(DYNARMIC_LIBS) -Wl,--end-group -static-libstdc++
+LIBS     += -Wl,--start-group $(DYNARMIC_LIBS) -Wl,--end-group -static-libstdc++ -ldl
 LINK     := $(CXX)
 endif
 

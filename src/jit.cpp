@@ -31,6 +31,16 @@ extern "C" {
 #include <ctime>
 #include <thread>
 #include <algorithm>
+#include <string>
+#include <unordered_map>
+#include <utility>
+
+#include <dlfcn.h>
+#include <signal.h>
+#include <sys/syscall.h>
+#include <time.h>
+#include <ucontext.h>
+#include <unistd.h>
 #include <array>
 #include <memory>
 #include <optional>
@@ -187,6 +197,63 @@ struct Bridge final : Dynarmic::A32::UserCallbacks {
 
 Bridge *g_bridge;
 
+/* VFLASH_JITPROF (debugging): samples the emulation thread's PC every
+ * millisecond of its CPU time; jit_stats prints where the samples fell -
+ * offsets into the core (map them with nm), other libraries, or code the
+ * JIT generated. perf does not run where RetroArch does. */
+#if defined(__linux__) && defined(__aarch64__)
+constexpr std::size_t PROF_N = 1u << 16;
+volatile std::uintptr_t prof_pc[PROF_N];
+volatile std::size_t prof_n;
+void prof_signal(int, siginfo_t *, void *uc) {
+    std::size_t n = prof_n;
+    if (n < PROF_N) {
+        prof_pc[n] = ((ucontext_t *)uc)->uc_mcontext.pc;
+        prof_n = n + 1;
+    }
+}
+void prof_start() {
+    struct sigaction sa{};
+    sa.sa_sigaction = prof_signal;
+    sa.sa_flags = SA_SIGINFO | SA_RESTART;
+    sigaction(SIGPROF, &sa, nullptr);
+    sigevent ev{};
+    ev.sigev_notify = SIGEV_THREAD_ID;
+    ev.sigev_signo = SIGPROF;
+    ev._sigev_un._tid = (pid_t)syscall(SYS_gettid);
+    timer_t t;
+    if (timer_create(CLOCK_THREAD_CPUTIME_ID, &ev, &t)) return;
+    itimerspec its{};
+    its.it_interval.tv_nsec = its.it_value.tv_nsec = 1000000;
+    timer_settime(t, 0, &its, nullptr);
+}
+void prof_report() {
+    std::size_t n = prof_n;
+    std::unordered_map<std::string, std::size_t> by;
+    for (std::size_t i = 0; i < n; i++) {
+        Dl_info info;
+        char key[256];
+        if (dladdr((void *)prof_pc[i], &info) && info.dli_fname) {
+            const char *f = strrchr(info.dli_fname, '/');
+            snprintf(key, sizeof key, "%s+%lx", f ? f + 1 : info.dli_fname,
+                     (unsigned long)(prof_pc[i] - (std::uintptr_t)info.dli_fbase) & ~0x3Ful);
+        } else {
+            snprintf(key, sizeof key, "jit-code");
+        }
+        by[key]++;
+    }
+    std::vector<std::pair<std::size_t, std::string>> top;
+    for (auto &e : by) top.push_back({e.second, e.first});
+    std::sort(top.rbegin(), top.rend());
+    printf("[JITPROF] %zu samples\n", n);
+    for (std::size_t i = 0; i < top.size() && i < 40; i++) printf("[JITPROF] %6zu %s\n", top[i].first, top[i].second.c_str());
+    prof_n = 0;
+}
+#else
+void prof_start() {}
+void prof_report() {}
+#endif
+
 void load_state(Bridge &b) {
     ARM9 *c = b.cpu;
     auto &regs = b.jit->Regs();
@@ -238,6 +305,7 @@ extern "C" int jit_init(ARM9 *cpu) {
         config.optimizations = static_cast<Dynarmic::OptimizationFlag>(strtoul(getenv("VFLASH_JITOPT"), nullptr, 16));
     b->jit = std::make_unique<Dynarmic::A32::Jit>(config);
     g_bridge = b;
+    if (getenv("VFLASH_JITPROF")) prof_start();
     // VFLASH_JITSTATS also line-buffers the log and has a thread report
     // every 5 s where the CPU is, which shows a hang inside a frame
     if (getenv("VFLASH_JITSTATS")) {
@@ -454,6 +522,7 @@ extern "C" void jit_stats(void) {
            (unsigned long long)b.n_runs, (unsigned long long)b.n_back, (unsigned long long)b.n_code,
            (unsigned long long)b.n_inval, (unsigned long long)b.n_clear, (unsigned long long)b.n_mem,
            (unsigned long long)b.n_ticks, (unsigned long long)(b.ns_run / 1000000));
+    if (getenv("VFLASH_JITPROF")) prof_report();
     b.n_runs = b.n_back = b.n_code = b.n_inval = b.n_clear = b.n_mem = b.n_ticks = b.ns_run = 0;
 }
 
