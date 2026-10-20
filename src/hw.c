@@ -214,6 +214,12 @@ static void unmodelled(HW *hw, uint32_t pa, int w, int size, uint32_t v) {
         printf("[HW?] read%d  %08X        PC=%08X\n", size, pa, hw->cpu->r[15]);
 }
 
+/* A VFLASH_ variable, looked up once: device reads the CPU polls (GPIO, the
+ * pad, the PMU) called getenv every time, which took most of the time of a
+ * polling loop. */
+#define ENV_ONCE(name) __extension__ ({ static const char *v_; static int got_; \
+    if (!got_) { v_ = getenv(name); got_ = 1; } v_; })
+
 /* ---------------------------------------------------------------- interrupts */
 
 static int ic_current(HW *hw, int fiq) {
@@ -748,7 +754,7 @@ static void pad_send(HW *hw, int u, const uint8_t *p, int n) {
  * <hex VFLASH_BTN mask>@<from>-<to>[;...] for scripted headless runs. */
 static uint32_t pad_buttons(HW *hw) {
     uint32_t in = hw->input;
-    const char *e = getenv("VFLASH_INPUT");
+    const char *e = ENV_ONCE("VFLASH_INPUT");
     while (e && *e) {
         unsigned long m = 0, a = 0, b = 0;
         if (sscanf(e, "%lx@%lu-%lu", &m, &a, &b) == 3 && hw->frame >= a && hw->frame < b) in |= (uint32_t)m;
@@ -805,11 +811,11 @@ static void pad_report6(HW *hw, int u) {
     };
     for (size_t i = 0; i < sizeof bits / sizeof bits[0]; i++)
         if (in & bits[i].in) b |= 1u << bits[i].bit;
-    const char *e = getenv("VFLASH_PADBITS");
+    const char *e = ENV_ONCE("VFLASH_PADBITS");
     unsigned long m = 0, a = 0, z = 0;
     if (e && sscanf(e, "%lx@%lu-%lu", &m, &a, &z) == 3 && hw->frame >= a && hw->frame < z) b |= (uint32_t)m;
     unsigned long sx, sy;   /* VFLASH_STICK=<hex x>,<hex y>@<from>-<to>: raw stick values */
-    e = getenv("VFLASH_STICK");
+    e = ENV_ONCE("VFLASH_STICK");
     if (e && sscanf(e, "%lx,%lx@%lu-%lu", &sx, &sy, &a, &z) == 4 && hw->frame >= a && hw->frame < z) {
         x = (uint32_t)sx; y = (uint32_t)sy;
     }
@@ -878,7 +884,7 @@ static void uart_out(HW *hw, int u, uint8_t ch) {
         s->pk_len == (s->pk[2] + 1) / 2 * 3 + 6) {
         s->pk_len = 0;
         s->pad_open = 1;
-        if (!getenv("VFLASH_NOPAD")) pad_reply(hw, u);
+        if (!ENV_ONCE("VFLASH_NOPAD")) pad_reply(hw, u);
     }
     }
     if (ch == '\n' || s->len == (int)sizeof(s->line) - 1) {
@@ -959,22 +965,22 @@ static uint32_t gpio_read(HW *hw, uint32_t pa) {
          * others read the input. The kernel writes B0 bit 2 while it is an
          * input, and must still see it drop before starting a BOOT.BIN. */
         uint32_t v = (g->in[port] & ~g->dir[port]) | (g->out[port] & g->dir[port]);
-        if (getenv("VFLASH_GPIOOR")) v = g->in[port] | g->out[port];
-        if (b && port == 0 && getenv("VFLASH_B0SET") && hw->frame >= strtoull(getenv("VFLASH_B0SET"), NULL, 0))
+        if (ENV_ONCE("VFLASH_GPIOOR")) v = g->in[port] | g->out[port];
+        if (b && port == 0 && ENV_ONCE("VFLASH_B0SET") && hw->frame >= strtoull(ENV_ONCE("VFLASH_B0SET"), NULL, 0))
             v |= 1;
-        else if (b && port == 0 && hw->cd && hw->cd->is_open && !getenv("VFLASH_GPIOB"))
+        else if (b && port == 0 && hw->cd && hw->cd->is_open && !ENV_ONCE("VFLASH_GPIOB"))
             v &= ~1u;
         if (b && port == 0 && hw->cd && hw->cd->is_open && hw->frame < 120 &&
-            !getenv("VFLASH_GPIOB"))
+            !ENV_ONCE("VFLASH_GPIOB"))
             v = (v & ~1u) | 4;
-        if (b && port == 0 && getenv("VFLASH_PWRHOLD") &&
-            hw->frame >= strtoull(getenv("VFLASH_PWRHOLD"), NULL, 0))
+        if (b && port == 0 && ENV_ONCE("VFLASH_PWRHOLD") &&
+            hw->frame >= strtoull(ENV_ONCE("VFLASH_PWRHOLD"), NULL, 0))
             v &= ~5u;   /* VFLASH_PWRHOLD=<frame>: wake inputs (B0 bits 0, 2) released */
         /* A1 bit 6 (pin 14) is the disc lid switch, high while the lid is
          * open; the kernel debounces it (0x10053828). VFLASH_LID=<from>-<to>
          * holds the lid open over a frame range. */
         if (!b && port == 1) {
-            const char *l = getenv("VFLASH_LID");
+            const char *l = ENV_ONCE("VFLASH_LID");
             unsigned long a0 = 0, a1 = 0;
             if (l && sscanf(l, "%lu-%lu", &a0, &a1) == 2 && hw->frame >= a0 && hw->frame < a1)
                 v |= 0x40;
