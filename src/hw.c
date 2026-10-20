@@ -2668,6 +2668,9 @@ void hw_run_frame(HW *hw) {
                (unsigned long)hw->frame, c->r[15], c->cpsr, (unsigned long)hw->irqs,
                (unsigned long)hw->acks, (unsigned long)hw->ic24,
                hw->ic.status, hw->ic.mask[0], hw->ic.mask[1], hw->ic.limit[0]);
+#ifdef FLASHEM_JIT
+        jit_stats();
+#endif
         printf("[HW]   cd: %u sectors, last lba %u; irqs by line:", hw->cd_sectors, hw->cd_last_lba);
         for (int l = 0; l < 32; l++)
             if (hw->irq_by_line[l]) printf(" %d:%u", l, hw->irq_by_line[l]);

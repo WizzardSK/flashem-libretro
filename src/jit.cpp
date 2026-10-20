@@ -48,6 +48,9 @@ struct Bridge final : Dynarmic::A32::UserCallbacks {
     std::size_t fallback_count = 0;
     // 4 KB pages code was translated from
     std::vector<std::uint8_t> code_page = std::vector<std::uint8_t>(1u << 20);
+    // VFLASH_JITSTATS: runs, instructions given back, code words read
+    // (translation), pages invalidated, full clears
+    std::uint64_t n_runs = 0, n_back = 0, n_code = 0, n_inval = 0, n_clear = 0;
 
     void *ctx() const { return cpu->mem_ctx; }
 
@@ -56,6 +59,7 @@ struct Bridge final : Dynarmic::A32::UserCallbacks {
         for (std::uint32_t p = va >> 12, e = (std::uint32_t)((va + len - 1) >> 12); p <= e; p++)
             if (code_page[p]) {
                 code_page[p] = 0;
+                n_inval++;
                 jit->InvalidateCacheRange(p << 12, 4096);
             }
     }
@@ -83,6 +87,7 @@ struct Bridge final : Dynarmic::A32::UserCallbacks {
 
     std::optional<std::uint32_t> MemoryReadCode(std::uint32_t va) override {
         mark(va);
+        n_code++;
         return cpu->mem_read32(ctx(), va & ~3u);
     }
     std::uint8_t MemoryRead8(std::uint32_t va) override { return (std::uint8_t)rd(va, 1); }
@@ -194,10 +199,12 @@ bool run_once(Bridge &b, ARM9 *cpu, std::uint64_t stop, bool step) {
     b.fallback = b.svc = false;
     load_state(b);
     b.jit->ClearHalt(HALT_FALLBACK);
+    b.n_runs++;
     if (step) b.jit->Step(); else b.jit->Run();
     store_state(b);
     cpu->cycles += b.used;
     if (!b.fallback) return false;
+    b.n_back += b.fallback_count;
     // the instructions dynarmic gave back, by the interpreter; an MMU change
     // among them means the code cache is translated by stale mappings
     const CP15 mmu = cpu->cp15;
@@ -219,6 +226,7 @@ bool run_once(Bridge &b, ARM9 *cpu, std::uint64_t stop, bool step) {
     }
     if (cpu->cp15.ttb != mmu.ttb || cpu->cp15.control != mmu.control
         || cpu->cp15.domain != mmu.domain || cpu->cp15.pid != mmu.pid) {
+        b.n_clear++;
         b.jit->ClearCache();
         std::fill(b.code_page.begin(), b.code_page.end(), 0);
     }
@@ -329,6 +337,16 @@ extern "C" void jit_run(ARM9 *cpu, std::uint64_t stop) {
         return;
     }
     run_once(b, cpu, stop, false);
+}
+
+extern "C" void jit_stats(void) {
+    static const bool on = getenv("VFLASH_JITSTATS") != nullptr;
+    if (!g_bridge || !on) return;
+    Bridge &b = *g_bridge;
+    printf("[JIT] runs %llu, given back %llu, code words read %llu, pages invalidated %llu, clears %llu\n",
+           (unsigned long long)b.n_runs, (unsigned long long)b.n_back, (unsigned long long)b.n_code,
+           (unsigned long long)b.n_inval, (unsigned long long)b.n_clear);
+    b.n_runs = b.n_back = b.n_code = b.n_inval = b.n_clear = 0;
 }
 
 extern "C" void jit_note_write(std::uint32_t pa, std::size_t len) {
