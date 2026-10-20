@@ -1,0 +1,29 @@
+diff --git a/src/dynarmic/frontend/A32/translate/impl/status_register_access.cpp b/src/dynarmic/frontend/A32/translate/impl/status_register_access.cpp
+index 60110df8..d76023f9 100644
+--- a/src/dynarmic/frontend/A32/translate/impl/status_register_access.cpp
++++ b/src/dynarmic/frontend/A32/translate/impl/status_register_access.cpp
+@@ -33,6 +33,12 @@ bool TranslatorVisitor::arm_MRS(Cond cond, Reg d) {
+ bool TranslatorVisitor::arm_MSR_imm(Cond cond, unsigned mask, int rotate, Imm<8> imm8) {
+     ASSERT_MSG(mask != 0, "Decode error");
+ 
++    // flashem: the control field (mode, I, F) belongs to the host, whose
++    // interpreter keeps the banked registers of each mode
++    if (mcl::bit::get_bit<0>(mask)) {
++        return InterpretThisInstruction();
++    }
++
+     if (!ArmConditionPassed(cond)) {
+         return true;
+     }
+@@ -67,6 +73,11 @@ bool TranslatorVisitor::arm_MSR_reg(Cond cond, unsigned mask, Reg n) {
+         return UnpredictableInstruction();
+     }
+ 
++    // flashem: as arm_MSR_imm
++    if (mcl::bit::get_bit<0>(mask)) {
++        return InterpretThisInstruction();
++    }
++
+     if (n == Reg::PC) {
+         return UnpredictableInstruction();
+     }

@@ -5,6 +5,10 @@
 #   tools/build_dynarmic.sh [out dir] [extra cmake arguments...]
 set -e
 OUT=${1:-build/dynarmic}
+# flashem's changes to dynarmic (tools/dynarmic.patch), applied once
+if git -C external/dynarmic apply --check ../../tools/dynarmic.patch 2>/dev/null; then
+    git -C external/dynarmic apply ../../tools/dynarmic.patch
+fi
 [ $# -gt 0 ] && shift
 cmake -S external/dynarmic -B "$OUT" \
     -DCMAKE_BUILD_TYPE=Release \

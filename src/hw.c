@@ -20,6 +20,11 @@
 #include "zevio_dsp.h"
 #include "midi.h"
 #include "cdda_dma.h"
+#ifdef FLASHEM_JIT
+#include "jit.h"
+#else
+#define jit_note_write(pa, len) ((void)0)
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1184,6 +1189,7 @@ static void cd_deliver(HW *hw, int32_t lba) {
         ptr = dma;
         uint8_t *p = cd_ram(hw, ptr, 2048);
         if (p && !cdrom_read_sector(hw->cd, (uint32_t)lba, p)) memset(p, 0, 2048);
+        jit_note_write(ptr, 2048);
         dma += 2048;
         if (dma + 2048 > end) dma = start;
         s[0x24 >> 2] = dma;
@@ -1365,6 +1371,7 @@ static void dmac_run(HW *hw, int ch) {
     uint32_t src = c[1], dst = c[2];
     uint8_t *s = cd_ram(hw, src, len), *d = cd_ram(hw, dst, len);
     if (s && d) memmove(d, s, len);
+    jit_note_write(dst, len);
     else {
         /* A device on one side: move it a word at a time over the bus. */
         for (uint32_t i = 0; i < len; i += 4)
@@ -1877,6 +1884,7 @@ int hw_load_phys(HW *hw, uint32_t pa, const uint8_t *data, uint32_t len) {
     uint8_t *dst = (uint8_t *)ram_at(hw, pa, len);
     if (!dst) return 0;
     memcpy(dst, data, len);
+    jit_note_write(pa, len);
     return 1;
 }
 
@@ -2353,12 +2361,21 @@ HW *hw_create(ARM9 *cpu, const uint8_t *rom, uint32_t rom_size,
             hw->trace_left = comma ? atoi(comma + 1) : 20;
         }
     }
+#ifdef FLASHEM_JIT
+    {
+        const char *j = getenv("VFLASH_JIT");
+        if (!(j && *j == '0') && jit_init(cpu)) printf("[HW] JIT: %s\n", jit_probe());
+    }
+#endif
     printf("[HW] Booting the ROM at 0\n");
     return hw;
 }
 
 void hw_destroy(HW *hw) {
     if (!hw) return;
+#ifdef FLASHEM_JIT
+    jit_shutdown();
+#endif
     free(hw->mc);
     free(hw->ram);
     free(hw);
@@ -2553,6 +2570,14 @@ void hw_run_frame(HW *hw) {
         /* The debugging hooks, looked at once a slice rather than before
          * every instruction (only the debugger and env vars set them) */
         const int hooks = hw->nbp || hw->puts_pc || hw->trace_left;
+#ifdef FLASHEM_JIT
+        if (!hooks && jit_active()) {
+            while (c->cycles < stop) {
+                jit_run(c, stop);
+                if (hw->ic.line[0] | hw->ic.line[1]) check_irq(hw);
+            }
+        }
+#endif
         while (c->cycles < stop) {
             if (!hooks) {
                 arm9_step(c);

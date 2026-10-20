@@ -8,11 +8,24 @@
 extern "C" {
 #endif
 
+#include <stdint.h>
+
+struct ARM9;
+
 /* 1 when the core was built with dynarmic */
 int jit_available(void);
-/* M0: makes a dynarmic A32 instance and drops it again; a description of
- * the result for the log */
+/* What the JIT is, for the log */
 const char *jit_probe(void);
+
+/* Sets the JIT up for the CPU (one at a time); 1 if it runs the code now */
+int  jit_init(struct ARM9 *cpu);
+void jit_shutdown(void);
+int  jit_active(void);
+/* Runs the CPU until its cycle count reaches stop (or a little past) */
+void jit_run(struct ARM9 *cpu, uint64_t stop);
+/* Memory written behind the CPU's back (DMA, program loading): code
+ * translated from it is dropped */
+void jit_note_write(uint32_t addr, size_t len);
 
 #ifdef __cplusplus
 }

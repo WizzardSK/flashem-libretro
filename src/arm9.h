@@ -68,6 +68,8 @@ typedef struct ARM9 ARM9;
 
 void     arm9_reset(ARM9 *cpu);
 int      arm9_step(ARM9 *cpu);   /* returns cycles consumed */
+/* The cycles the interpreter counts for an instruction (the JIT counts the same) */
+int      arm9_insn_cycles(uint32_t insn, int thumb);
 void     arm9_run(ARM9 *cpu, int cycles);
 void     arm9_irq(ARM9 *cpu);
 void     arm9_fiq(ARM9 *cpu);
