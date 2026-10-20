@@ -153,8 +153,12 @@ static void core_write(void *ctx,uint16_t a,uint16_t v,int program) {
 }
 void zevio_dsp_run(ZevioDSP *z,uint64_t budget) {
     if(!z->running) return;
-    /* asleep with nothing to wake it, the rest of the budget is idle */
-    while(budget-- && zsp400_step(&z->core) && !zsp400_idle(&z->core)) { }
+    while(budget) {
+        uint64_t slept=zsp400_sleep(&z->core,budget);   /* asleep: timers only */
+        if(slept) { budget-=slept; continue; }
+        if(!zsp400_step(&z->core)) break;
+        budget--;
+    }
     if(z->core.fault && !z->fault_reported) {
         fprintf(stderr,"[ZDSP] stopped fault=%d PC=%04x opcode/address=%04x after %llu instructions\n",z->core.fault,z->core.fault_pc,z->core.fault_op,(unsigned long long)z->core.instructions);
         z->fault_reported=1;

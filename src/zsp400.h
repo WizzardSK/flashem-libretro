@@ -21,6 +21,7 @@ typedef struct {
 void zsp400_reset(ZSP400 *s);
 int zsp400_step(ZSP400 *s);
 void zsp400_request_irq(ZSP400 *s, unsigned line);
-/* 1 while the core sleeps with nothing of its own to wake it - no timer
- * running, no interrupt pending - so steps would change nothing */
-int zsp400_idle(const ZSP400 *s);
+/* While the core sleeps and no interrupt can be taken, steps only count its
+ * timers down: runs up to max of them at once, stopping before the one
+ * where a timer runs out, and returns how many (0 = step normally) */
+uint64_t zsp400_sleep(ZSP400 *s, uint64_t max);
