@@ -9,6 +9,10 @@ The emulator runs the console's original boot ROM and each disc's own ARM code.
 The ROM boots µMORE, mounts the disc through the emulated CD hardware, and loads
 the game's `0SYSTEM/BOOT.BIN`. Graphics, audio, and movies come from the emulated
 devices; the original movie-decoder firmware runs on a ZSP400 interpreter.
+In the libretro cores for 64-bit hosts (Linux, Windows x64, macOS arm64,
+Android arm64-v8a/x86_64) the ARM9 runs on the dynarmic JIT recompiler, with
+the interpreter for what it gives back (mode changes, CP15, exceptions); the
+core option CPU Emulation switches back to the interpreter.
 There is no high-level replacement for the operating system or games.
 
 ## Current status
@@ -49,7 +53,8 @@ playability across every title, revision, or game mode.
   interpolation, and sound interrupt generation remain incomplete.
 - There are no save states or serialization-based features such as rewind,
   run-ahead, or netplay. The libretro core also has no reset implementation,
-  disk swapping, cheats, core options, or persistent save-memory interface.
+  disk swapping, cheats, or persistent save-memory interface; its one core
+  option is CPU Emulation (JIT or Interpreter).
   Reload the content to restart it.
 - The libretro core currently advertises 60 Hz/NTSC timing even though framebuffer
   dimensions follow the video-engine registers, including PAL-sized rasters.
@@ -241,6 +246,7 @@ The V.Flash uses an LSI Logic ZEVIO 1020 with an ARM926EJ-S CPU at 150 MHz,
 | Source | Responsibility |
 |--------|----------------|
 | [src/arm9.c](src/arm9.c), [src/cp15.c](src/cp15.c) | ARM/Thumb interpreter and MMU |
+| [src/jit.cpp](src/jit.cpp), [tools/dynarmic.patch](tools/dynarmic.patch) | The ARM9 on dynarmic (`external/dynarmic`, built by `tools/build_dynarmic.sh`, `make -f Makefile.libretro JIT=1`) |
 | [src/hw.c](src/hw.c) | Memory map, timers, interrupts, GPIO, UART/controller reports, CD decoder, and video scanout |
 | [src/cdrom.c](src/cdrom.c), [src/cdsp.c](src/cdsp.c) | Disc images, track/subcode data, and CD servo model |
 | [src/ge.c](src/ge.c) | Command-list graphics engine and software rasterizer |
@@ -283,6 +289,7 @@ condition is supplied.
 | `VFLASH_SHOT_FRAME=N[,N...]` | Headless screenshot frames in ascending order; default 50 |
 | `VFLASH_SHOT=<path>` | Headless PPM path; `%d` inserts the frame number; default `/tmp/vflash_screen.ppm` |
 | `VFLASH_FASTBOOT=0` | Disable accelerated boot |
+| `VFLASH_JIT=0` | Libretro core: run the ARM9 on the interpreter (as the core option) |
 | `VFLASH_RTC=<unix-seconds>` | Fix the RTC's starting time for reproducible runs |
 | `VFLASH_INPUT=<hex>@<from>-<to>[;...]` | Script frontend button masks; e.g. `100@3100-3110` presses Enter |
 | `VFLASH_KEYS=<hex>@<from>-<to>` | Force raw key-register bits, distinct from controller reports |

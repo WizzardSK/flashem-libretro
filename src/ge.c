@@ -124,11 +124,28 @@ static void fill(GE *g, int x0, int y0, int w, int h, uint16_t c) {
         if (x1 > g->clip_x1 + 1) x1 = g->clip_x1 + 1;
         if (y1 > g->clip_y1 + 1) y1 = g->clip_y1 + 1;
     }
-    for (int y = y0; y < y1; y++)
-        for (int x = x0; x < x1; x++) {
-            uint16_t *p = px(g, x, y);
-            if (p) { *p = c; if (y < 1024) { zbuf[y * 1024 + x] = 1e30f; abuf[y * 1024 + x] = 0; } watch(g, x, y, c); }
+    /* what px() would refuse anyway, so that a row is a run of stores */
+    if (x0 < 0) x0 = 0;
+    if (x1 > 1024) x1 = 1024;
+    if (y0 < g->top) y0 = g->top;
+    for (int y = y0; y < y1; y++) {
+        uint32_t o = g->surface + (uint32_t)(y >> 3) * 16384 + (uint32_t)(y & 7) * 64 - RAM_BASE;
+        if ((uint64_t)o + 16384 > g->ram_size) {   /* a row partly outside RAM */
+            for (int x = x0; x < x1; x++) {
+                uint16_t *p = px(g, x, y);
+                if (p) { *p = c; if (y < 1024) { zbuf[y * 1024 + x] = 1e30f; abuf[y * 1024 + x] = 0; } watch(g, x, y, c); }
+            }
+            continue;
         }
+        uint8_t *row = g->ram + o;
+        for (int x = x0; x < x1; x++) ((uint16_t *)(row + (x >> 5) * 512))[x & 31] = c;
+        if (y < 1024) {
+            for (int x = x0; x < x1; x++) zbuf[y * 1024 + x] = 1e30f;
+            if (x1 > x0) memset(abuf + y * 1024 + x0, 0, (size_t)(x1 - x0));
+        }
+        if (watch_x >= 0)
+            for (int x = x0; x < x1; x++) watch(g, x, y, c);
+    }
 }
 
 /* A texel of the current texture as a BGR555 colour; returns 0 for a
@@ -243,9 +260,10 @@ static void sprite(GE *g, uint32_t hdr, uint32_t pc) {
     int tint = (f & 1) && (cw & 0xFFFFFF) != 0xFFFFFF;
     int t4444 = (f & 1) && (g->tex_fmt & 0x100);
     int da = dsta && (f & 1) && !t4444 && (blend & 0x43) == 0x42;
+    const uint32_t flat = (f & 1) ? 0 : (rd(g, pc + 16) & 0xFFFF) | 0x100000u;
     for (int y = ys; y < h; y++)
         for (int x = xs; x < w; x++) {
-            uint32_t c = (f & 1) ? tex_get(g, u0 + x, v0 + y) : (rd(g, pc + 16) & 0xFFFF) | 0x100000u;
+            uint32_t c = (f & 1) ? tex_get(g, u0 + x, v0 + y) : flat;
             uint16_t *p;
             if (c && (p = px(g, x0 + x, y0 + y))) {
                 int yy = y0 + y, xx = x0 + x;
@@ -268,7 +286,7 @@ static void sprite(GE *g, uint32_t hdr, uint32_t pc) {
                 }
                 if (in && !da) abuf[yy * 1024 + xx] = t4444 ? (uint8_t)(c >> 16 & 31) : 0;
                 *p = blend_px(*p, c); g->pixels++;
-                watch(g, x0 + x, y0 + y, *p);
+                if (watch_x >= 0) watch(g, x0 + x, y0 + y, *p);
             }
         }
 }
@@ -295,8 +313,13 @@ static int use_half(void) {
 
 double ge_f16_to(uint16_t h) {
     if (!(h & 0x7FFF)) return 0;
-    double v = ldexp(1.0 + (h & 511) / 512.0, (h >> 9 & 63) - 31);
-    return h & 0x8000 ? -v : v;
+    /* (1 + m/512) * 2^(e-31) put together as a double's bits - the same
+     * value ldexp gave, without a libm call per vertex coordinate */
+    uint64_t bits = (uint64_t)(h & 0x8000) << 48 | (uint64_t)((h >> 9 & 63) - 31 + 1023) << 52 |
+                    (uint64_t)(h & 511) << 43;
+    double v;
+    memcpy(&v, &bits, sizeof v);
+    return v;
 }
 
 uint16_t ge_f16_from(double v) {
@@ -464,7 +487,31 @@ static void tex_setup(GE *g) {
     tc.soff = (int32_t)(g->surface - RAM_BASE);
     tc.ram = g->ram;
     int n = bpp == 4 ? 16 : bpp == 8 ? 256 : 0;
-    for (int i = 0; i < n; i++) tc.pal[i] = pal_colour(g, i);
+    /* The palette row, decoded again only when its words or format changed:
+     * every textured triangle sets the texture up, mostly with the palette
+     * of the one before (SpongeBob's beach: ~10 % of the time went here) */
+    static uint16_t raw[256], last_raw[256];
+    static int last_n = -1, last_4444;
+    int direct = n && g->pal_x >= 0 && g->pal_x + n <= 1024 && g->pal_y >= g->top;
+    if (direct) {
+        uint32_t o = g->surface + (uint32_t)(g->pal_y >> 3) * 16384 + (uint32_t)(g->pal_y & 7) * 64 - RAM_BASE;
+        direct = (uint64_t)o + 16384 <= g->ram_size;
+        /* a row of a tile is 32 pixels side by side: copied a run at a time */
+        for (int i = 0; direct && i < n; ) {
+            int x = g->pal_x + i, run = 32 - (x & 31);
+            if (run > n - i) run = n - i;
+            memcpy(&raw[i], g->ram + o + (x >> 5) * 512 + (x & 31) * 2, (size_t)run * 2);
+            i += run;
+        }
+    }
+    if (direct && n == last_n && tc.a4444 == last_4444 && !memcmp(raw, last_raw, (size_t)n * 2))
+        ;   /* tc.pal still holds it */
+    else {
+        for (int i = 0; i < n; i++) tc.pal[i] = pal_colour(g, i);
+        last_n = direct ? n : -1;
+        last_4444 = tc.a4444;
+        if (direct) memcpy(last_raw, raw, (size_t)n * 2);
+    }
     tc.ok = 1;
 }
 
@@ -528,7 +575,7 @@ static inline void tquad(int iu, int iv, uint32_t c[4]) {
 /* Bilinear texture lookup for triangles (VFLASH_FILTER=0 turns it off):
  * point sampling left detailed textures, like Dingo Rallye's race ground,
  * as speckle. Falls back to the nearest texel next to transparent ones. */
-static uint32_t filtered(GE *g, float fu, float fv) {
+static inline uint32_t filtered(GE *g, float fu, float fv) {
     static int on = -1;
     if (on < 0) on = !getenv("VFLASH_FILTER") || atoi(getenv("VFLASH_FILTER"));
     if (!on) return TEXEL(g, (int)fu, (int)fv);
@@ -617,6 +664,12 @@ static void raster(GE *g, V3 a, V3 b, V3 c) {
         int xs = (int)floorf(lo - 0.5f) - 1, xe = (int)ceilf(hi - 0.5f) + 1;
         if (xs < x0) xs = x0;
         if (xe > x1) xe = x1;
+        /* the row's surface memory, when px() would give every pixel of it */
+        uint8_t *row = NULL;
+        if (xs >= 0 && xe <= 1023 && y >= g->top) {
+            uint32_t o = g->surface + (uint32_t)(y >> 3) * 16384 + (uint32_t)(y & 7) * 64 - RAM_BASE;
+            if ((uint64_t)o + 16384 <= g->ram_size) row = g->ram + o;
+        }
         for (int x = xs; x <= xe; x++) {
             float px_ = (float)x + 0.5f;
             float w0 = edge(b.x, b.y, c.x, c.y, px_, py_) * rarea;
@@ -636,9 +689,10 @@ static void raster(GE *g, V3 a, V3 b, V3 c) {
                 for (int k = 0; k < 3; k++) l[k] = (w0 * la[k] + w1 * lb[k] + w2 * lc[k]) * z;
                 col = shade(col, l, z);
             }
-            uint16_t *p = px(g, x, y);
+            uint16_t *p = row ? (uint16_t *)(row + (x >> 5) * 512) + (x & 31) : px(g, x, y);
             if (p) {
-                *p = blend_px(*p, col); if (zenable) *zp = z; g->pixels++; watch(g, x, y, *p);
+                *p = blend_px(*p, col); if (zenable) *zp = z; g->pixels++;
+                if (watch_x >= 0) watch(g, x, y, *p);
                 abuf[y * 1024 + x] = g->tex_bpp && (g->tex_fmt & 0x100) ? (uint8_t)(col >> 16 & 31) : 0;
             }
         }
@@ -686,7 +740,9 @@ static void tri(GE *g, V3 a, V3 b, V3 c) {
     if (clip < 0) clip = !getenv("VFLASH_CLIP") || atoi(getenv("VFLASH_CLIP"));
     if ((!a.ok && !b.ok && !c.ok) || !clip) return;
     float nz = near_z(g);
-    if (getenv("VFLASH_CLIPLOG")) {
+    static int cliplog = -1;
+    if (cliplog < 0) cliplog = getenv("VFLASH_CLIPLOG") != NULL;
+    if (cliplog) {
         static int n;
         if (n++ < 40) printf("[CLIP] z %.3f %.3f %.3f  vx %.2f %.2f %.2f  vy %.2f %.2f %.2f near %.4f c %04X\n",
                              a.z, b.z, c.z, a.vx, b.vx, c.vx, a.vy, b.vy, c.vy, nz, a.c);
@@ -981,9 +1037,13 @@ static void run(GE *g, uint32_t pc, uint32_t end, int depth) {
                 double inverse = ge_f16_to((uint16_t)c);
                 float clear_depth = inverse > 0 ? (float)(1.0 / inverse) : 1e30f;
                 int x0 = g->clip_x0 + (int)(p & 0xFFFF), y0 = g->clip_y0 + (int)(p >> 16);
-                for (int y = y0; y < y0 + (int)(s >> 16); y++)
-                    for (int x = x0; x < x0 + (int)(s & 0xFFFF); x++)
-                        if (x >= 0 && x < 1024 && y >= 0 && y < 1024) zbuf[y * 1024 + x] = clear_depth;
+                int x1 = x0 + (int)(s & 0xFFFF), y1 = y0 + (int)(s >> 16);
+                if (x0 < 0) x0 = 0;
+                if (y0 < 0) y0 = 0;
+                if (x1 > 1024) x1 = 1024;
+                if (y1 > 1024) y1 = 1024;
+                for (int y = y0; y < y1; y++)
+                    for (int x = x0; x < x1; x++) zbuf[y * 1024 + x] = clear_depth;
                 break;
             }
             fill(g, (int)(p & 0xFFFF), (int)(p >> 16), (int)(s & 0xFFFF), (int)(s >> 16), (uint16_t)c);

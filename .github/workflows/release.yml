@@ -41,6 +41,9 @@ jobs:
             ext: dll
     steps:
       - uses: actions/checkout@main
+        with:
+          # dynarmic and its externals, for the JIT
+          submodules: recursive
 
       # The core needs nothing beyond a C compiler and libm.
       # MSYS2 rather than MSVC: the makefile is GNU make and the core is C,
@@ -55,11 +58,34 @@ jobs:
             make
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-SDL2
+            mingw-w64-x86_64-cmake
+            mingw-w64-x86_64-ninja
+            mingw-w64-x86_64-boost
+            git
             zip
+
+      # The ARM9's JIT (dynarmic), linked into the core with JIT=1
+      - name: dynarmic (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake libboost-dev
+          tools/build_dynarmic.sh build/dynarmic
+
+      - name: dynarmic (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install boost
+          tools/build_dynarmic.sh build/dynarmic
+
+      - name: dynarmic (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: tools/build_dynarmic.sh build/dynarmic -G Ninja
 
       - name: Build the libretro core
         if: runner.os != 'Windows'
-        run: make -f Makefile.libretro -j$(getconf _NPROCESSORS_ONLN)
+        run: make -f Makefile.libretro JIT=1 -j$(getconf _NPROCESSORS_ONLN)
 
       # -static so the .dll carries the MinGW runtime rather than asking the
       # person who downloads it to find matching MinGW runtimes.
@@ -68,7 +94,7 @@ jobs:
         shell: msys2 {0}
         run: |
           export LDFLAGS="-static"
-          make -f Makefile.libretro platform=win -j$(nproc)
+          make -f Makefile.libretro platform=win JIT=1 -j$(nproc)
 
       # A core missing an entry point loads and then does nothing useful, which
       # is a confusing thing to hand someone. Split per platform: the question
@@ -179,11 +205,31 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@main
+        with:
+          submodules: recursive
+
+      # dynarmic for the 64-bit ABIs (its backends are arm64 and x64; the
+      # 32-bit cores keep the interpreter). Boost is headers only, copied
+      # aside so the NDK build does not see the host's /usr/include.
+      - name: dynarmic
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake libboost-dev
+          mkdir -p build/boost-inc
+          cp -r /usr/include/boost build/boost-inc/
+          for abi in arm64-v8a x86_64; do
+            tools/build_dynarmic.sh "$PWD/build/dynarmic-android/$abi" \
+              -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake" \
+              -DANDROID_ABI=$abi -DANDROID_PLATFORM=android-21 \
+              -DBoost_INCLUDE_DIR="$PWD/build/boost-inc" -DBoost_NO_BOOST_CMAKE=ON \
+              -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH \
+              -DCMAKE_CXX_FLAGS="-include cstdlib"   # the bundled fmt leans on a transitive <cstdlib> the NDK's libc++ dropped
+          done
 
       - name: Build the libretro core
         run: |
           "$ANDROID_NDK_LATEST_HOME/ndk-build" -C jni -j$(getconf _NPROCESSORS_ONLN) \
-            APP_ABI="arm64-v8a armeabi-v7a x86_64 x86"
+            APP_ABI="arm64-v8a armeabi-v7a x86_64 x86" DYNARMIC_ANDROID="$PWD/build/dynarmic-android"
 
       - name: Check the cores export what a frontend calls
         run: |

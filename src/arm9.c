@@ -934,6 +934,10 @@ static inline const uint8_t *fetch_host(ARM9 *cpu, uint32_t a) {
     return p ? p + (a & 0xFFF) : NULL;
 }
 
+int arm9_insn_cycles(uint32_t insn, int thumb) {
+    return thumb ? insn_cycles_thumb((uint16_t)insn) : insn_cycles_arm(insn);
+}
+
 int arm9_step(ARM9 *cpu) {
     uint32_t inst_addr = PC;
     int cyc;

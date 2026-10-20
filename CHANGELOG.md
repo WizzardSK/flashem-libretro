@@ -2,6 +2,13 @@
 
 What changed in FlashEm, newest first. Releases are builds of the libretro core and, from v0.3, of the standalone emulator too.
 
+## v0.5 - 2026-10-20
+
+- Faster, most of all in the libretro cores for 64-bit hosts: the ARM9 runs on the [dynarmic](https://github.com/azahar-emu/dynarmic) JIT recompiler instead of the interpreter (Linux, Windows x64, macOS arm64, Android arm64-v8a and x86_64; the 32-bit Android cores and the standalone keep the interpreter). The interpreter still executes what dynarmic gives back - changes of CPU mode, CP15, exceptions - and takes interrupts. A new core option, CPU Emulation (JIT / Interpreter, at the next start), goes back to the interpreter. SpongeBob's first 1500 frames: 95 s instead of 128 on a Snapdragon 7c (#5).
+- Movies: the DSP that decodes them, waiting for its timer, no longer does so one step at a time; SpongeBob's intro movie runs about a quarter faster. The result is the same as before, frame for frame.
+- 3D and 2D drawing: fills write whole rows, a texture's palette is decoded only when it changes, the engine's 16-bit floats are converted without a libm call, and triangles write through their row's memory - SpongeBob's 3D play about an eighth faster, with the same pixels.
+- Also faster in every build: device registers the code polls (GPIO, the pad, the PMU) no longer look up environment variables on every read, the interrupt controller only works when a line changes, and stores into a page table of an old MMU setup no longer flush the address cache each time.
+
 ## v0.4 - 2026-10-19
 
 - Faster: about a fifth less time per frame (SpongeBob's and Spider-Man's first 1500 frames in 101 and 99 s instead of 124 and 122 on a Snapdragon 7c). The ARM interpreter goes straight to the common instruction classes instead of testing a dozen rare encodings first, its add, subtract and shift helpers are put in place, and the frame loop no longer checks the debugger's hooks before every instruction. Emulation is unchanged: the state after those frames is the same as before (SatellaGuyAlt, #5).

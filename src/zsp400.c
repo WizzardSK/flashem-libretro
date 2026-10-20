@@ -101,8 +101,52 @@ static void set_control(ZSP400 *s,unsigned n,uint16_t v,uint16_t *next) {
     s->c[n]=v; if(n==16) *next=v;
 }
 void zsp400_request_irq(ZSP400 *s,unsigned line) { if(line<14) s->c[9]|=1u<<line; }
-static void tick(ZSP400 *s) {
+/* The interrupt tick() would take now, or 14 for none */
+static unsigned next_irq(const ZSP400 *s,unsigned *priority_out) {
+    if(!(s->c[2]&0x8000)) return 14;
+    unsigned pending=s->c[9]&s->c[2]&0x3fff, best=14, priority=0;
+    for(unsigned i=0;pending>>i;i++) if(pending&(1u<<i)) {
+        unsigned p=i<8 ? (s->c[4]>>(2*i))&3 : (s->c[3]>>(2*(i-8)))&3;
+        if(p>=(s->c[3]>>14) && (best==14 || p>=priority)) { best=i; priority=p; }
+    }
+    *priority_out=priority;
+    return best;
+}
+uint64_t zsp400_sleep(ZSP400 *s,uint64_t max) {
+    unsigned priority;
+    if(s->fault || !(s->c[15]&0x6000) || (s->c[15]&0x8000)) return 0;
+    if((s->flags&4u)!=(s->c[9]?4u:0) || next_irq(s,&priority)!=14) return 0;
+    /* steps until a running timer reaches 0, the first step that changes
+     * anything: stop just before it */
+    uint64_t k=max, to_dec[2]={0,0};
     for(unsigned i=0;i<2;i++) {
+        unsigned t=(s->c[1]>>(8*i))&255, period=(t&63)+1;
+        if(!(t&128) || !s->c[23+i]) continue;
+        to_dec[i]=s->timer_div[i]+1u>=period ? 1 : period-s->timer_div[i];
+        uint64_t expiry=to_dec[i]+(uint64_t)(s->c[23+i]-1)*period;
+        if(expiry-1<k) k=expiry-1;
+    }
+    if(!k) return 0;
+    for(unsigned i=0;i<2;i++) {
+        unsigned t=(s->c[1]>>(8*i))&255, period=(t&63)+1;
+        if(!(t&128) || !s->c[23+i]) continue;
+        if(k<to_dec[i]) s->timer_div[i]=(uint8_t)(s->timer_div[i]+k);
+        else {
+            uint64_t rest=k-to_dec[i];
+            s->c[23+i]=(uint16_t)(s->c[23+i]-1-rest/period);
+            s->timer_div[i]=(uint8_t)(rest%period);
+        }
+    }
+    return k;
+}
+/* The on-chip SRAM where the memory mode maps it (zevio_dsp.c core_memory) */
+static uint8_t *sram(ZSP400 *s,uint16_t a,int program) {
+    uint16_t mode=s->c[15];
+    if(program) return s->iram && a<0x4000 && (!(mode&2)||(mode&0x400)) ? s->iram+2u*a : NULL;
+    return s->dram && a<0xa000 && !(mode&1) ? s->dram+2u*a : NULL;
+}
+static void tick(ZSP400 *s) {
+    if(s->c[1]&0x8080) for(unsigned i=0;i<2;i++) {
         unsigned t=(s->c[1]>>(8*i))&255;
         if((t&128) && s->c[23+i] && ++s->timer_div[i]>=(t&63)+1) {
             s->timer_div[i]=0;
@@ -113,12 +157,7 @@ static void tick(ZSP400 *s) {
         }
     }
     s->flags=(s->flags&~4u)|(s->c[9]?4:0);
-    if(!(s->c[2]&0x8000)) return;
-    unsigned pending=s->c[9]&s->c[2]&0x3fff, best=14, priority=0;
-    for(unsigned i=0;i<14;i++) if(pending&(1u<<i)) {
-        unsigned p=i<8 ? (s->c[4]>>(2*i))&3 : (s->c[3]>>(2*(i-8)))&3;
-        if(p>=(s->c[3]>>14) && (best==14 || p>=priority)) { best=i; priority=p; }
-    }
+    unsigned priority, best=next_irq(s,&priority);
     if(best==14) return;
     s->c[18]=s->pc; /* between instructions: PC is already the next instruction */
     s->c[2]=(s->c[2]&0x3fff)|((s->c[2]&0x8000)>>1);
@@ -131,7 +170,9 @@ int zsp400_step(ZSP400 *s) {
     if(s->fault || (s->c[15]&0x8000)) return 0;
     tick(s);
     if(s->c[15]&0x6000) return 1; /* peripheral clocks still advance */
-    uint16_t pc=s->pc, w=s->read(s->ctx,pc,1), next=pc+1;
+    uint16_t pc=s->pc, next=pc+1, w;
+    const uint8_t *ip=sram(s,pc,1);
+    w=ip ? (uint16_t)(ip[0]|ip[1]<<8) : s->read(s->ctx,pc,1);
     unsigned top=w>>12, op=(w>>8)&15, x=(w>>4)&15, y=w&15;
     uint16_t a=s->r[x], b=s->r[y];
     if(top==0) next=pc+sx(w,12);
@@ -204,7 +245,9 @@ int zsp400_step(ZSP400 *s) {
         uint16_t values[2]={s->r[x],s->r[(x+1)&15]};
         for(int i=0;i<count;++i) {
             uint16_t at=cb_end && (unsigned)addr+i>=cb_end?cb_begin+(unsigned)addr+i-cb_end:(unsigned)addr+i;
-            if(top==7) values[i]=s->read(s->ctx,at,program);
+            uint8_t *m=sram(s,at,program);
+            if(m) { if(top==7) values[i]=(uint16_t)(m[0]|m[1]<<8); else { m[0]=(uint8_t)values[i]; m[1]=(uint8_t)(values[i]>>8); } }
+            else if(top==7) values[i]=s->read(s->ctx,at,program);
             else s->write(s->ctx,at,values[i],program);
         }
         if(top==7) { s->r[x]=values[0]; if(count==2) s->r[x+1]=values[1]; }

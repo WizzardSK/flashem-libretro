@@ -20,6 +20,7 @@ void zevio_dsp_init(ZevioDSP *z, uint8_t *ram, uint32_t base, uint32_t size) {
     z->ram = ram; z->ram_base = base; z->ram_size = size;
     z->trace = getenv("VFLASH_DSPTRACE") != NULL;
     z->core.ctx=z; z->core.read=core_read; z->core.write=core_write;
+    z->core.iram=z->p; z->core.dram=z->d;
     zevio_dsp_reset(z);
 }
 static uint8_t *bus(ZevioDSP *z, uint32_t a, uint32_t n) {
@@ -152,7 +153,14 @@ static void core_write(void *ctx,uint16_t a,uint16_t v,int program) {
 }
 void zevio_dsp_run(ZevioDSP *z,uint64_t budget) {
     if(!z->running) return;
-    while(budget-- && zsp400_step(&z->core)) { }
+    while(budget) {
+        if(z->core.c[15]&0x6000) {   /* asleep: timers only */
+            uint64_t slept=zsp400_sleep(&z->core,budget);
+            if(slept) { budget-=slept; continue; }
+        }
+        if(!zsp400_step(&z->core)) break;
+        budget--;
+    }
     if(z->core.fault && !z->fault_reported) {
         fprintf(stderr,"[ZDSP] stopped fault=%d PC=%04x opcode/address=%04x after %llu instructions\n",z->core.fault,z->core.fault_pc,z->core.fault_op,(unsigned long long)z->core.instructions);
         z->fault_reported=1;

@@ -56,6 +56,10 @@ struct ARM9 {
     /* Optional: host memory behind the 4 KB page holding addr, or NULL.
      * Instruction fetches read through it while cp15.tlb_gen stays put. */
     const uint8_t *(*mem_page)(void *ctx, uint32_t addr);
+    /* Optional: host memory behind the page that loads and stores may both
+     * use directly (plain RAM, no page table, no watch), or NULL - the JIT's
+     * page table. Valid while cp15.tlb_gen stays put. */
+    uint8_t *(*mem_page_rw)(void *ctx, uint32_t addr);
     const uint8_t *fetch_ptr;
     uint32_t fetch_page, fetch_gen;
 
@@ -68,6 +72,8 @@ typedef struct ARM9 ARM9;
 
 void     arm9_reset(ARM9 *cpu);
 int      arm9_step(ARM9 *cpu);   /* returns cycles consumed */
+/* The cycles the interpreter counts for an instruction (the JIT counts the same) */
+int      arm9_insn_cycles(uint32_t insn, int thumb);
 void     arm9_run(ARM9 *cpu, int cycles);
 void     arm9_irq(ARM9 *cpu);
 void     arm9_fiq(ARM9 *cpu);

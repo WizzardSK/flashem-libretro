@@ -13,6 +13,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef FLASHEM_JIT
+#include "jit.h"
+#endif
 #include <time.h>
 #ifdef _WIN32
 #include <direct.h>
@@ -93,6 +96,16 @@ void retro_set_environment(retro_environment_t cb)
 
    cb(RETRO_ENVIRONMENT_SET_SUPPORT_NO_GAME, &no_content);
    cb(RETRO_ENVIRONMENT_SET_CONTROLLER_INFO, (void*)ports);
+#ifdef FLASHEM_JIT
+   {
+      /* The ARM9 on dynarmic, or on the interpreter it started with */
+      static const struct retro_variable vars[] = {
+         { "flashem_cpu", "CPU Emulation (Restart); JIT|Interpreter" },
+         { NULL, NULL },
+      };
+      cb(RETRO_ENVIRONMENT_SET_VARIABLES, (void*)vars);
+   }
+#endif
 }
 
 void retro_set_video_refresh(retro_video_refresh_t cb) { video_cb = cb; }
@@ -108,6 +121,9 @@ void retro_init(void)
    log_cb = fallback_log;
    if (environ_cb && environ_cb(RETRO_ENVIRONMENT_GET_LOG_INTERFACE, &log))
       log_cb = log.log;
+#ifdef FLASHEM_JIT
+   log_cb(RETRO_LOG_INFO, "FlashEm: JIT %s\n", jit_probe());
+#endif
 }
 
 void retro_deinit(void)
@@ -339,6 +355,13 @@ bool retro_load_game(const struct retro_game_info *game)
       }
    }
 
+#ifdef FLASHEM_JIT
+   {
+      struct retro_variable var = { "flashem_cpu", NULL };
+      jit_enabled = !(environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value
+                      && !strcmp(var.value, "Interpreter"));
+   }
+#endif
    s_vf = vflash_create(disc);
    if (!s_vf)
    {
