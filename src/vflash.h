@@ -79,6 +79,11 @@ int       vflash_load_program(VFlash *vf, const char *path, uint32_t load_addr, 
  * inserted or last saved (1 when there was nothing to do or it went well). */
 int       vflash_memcard_load(VFlash *vf, const char *path);
 int       vflash_memcard_save(VFlash *vf, const char *path);
+/* The console's language, kept in its system flash: "en-us", "en-uk", "fr",
+ * "es", "de" or "nl"; "bios" (or NULL) leaves the system flash out and the
+ * Boot ROM picks its own. Right after vflash_create(), before the first frame.
+ * 0 for a name it does not know. */
+int       vflash_set_language(VFlash *vf, const char *name);
 void      vflash_destroy(VFlash *vf);
 void      vflash_run_frame(VFlash *vf);
 /* 1 while the ROM is still starting a disc's game (see hw_booting) and fast

@@ -53,8 +53,8 @@ playability across every title, revision, or game mode.
   interpolation, and sound interrupt generation remain incomplete.
 - There are no save states or serialization-based features such as rewind,
   run-ahead, or netplay. The libretro core also has no reset implementation,
-  disk swapping, cheats, or persistent save-memory interface; its one core
-  option is CPU Emulation (JIT or Interpreter).
+  disk swapping, cheats, or persistent save-memory interface; its core
+  options are Console Language and CPU Emulation (JIT or Interpreter).
   Reload the content to restart it.
 - The libretro core currently advertises 60 Hz/NTSC timing even though framebuffer
   dimensions follow the video-engine registers, including PAL-sized rasters.

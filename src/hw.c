@@ -125,6 +125,10 @@ struct HW {
     uint8_t       *mc;            /* the memory card's DataFlash, NULL: no card */
     uint8_t        mc_buf[2][1024];/* its two SRAM buffers */
     int            mc_dirty;      /* written since it was last saved */
+    uint8_t       *sf;            /* the system flash (SST25VF512), if fitted */
+    uint8_t        sf_status;     /* its status register: WEL, block protection */
+    int            sf_aai;        /* auto address increment programming on */
+    uint32_t       sf_aai_addr;
     uint32_t       dma[0x200 / 4];/* 0xBC000000: DMA controller */
     uint32_t       mathu[16];     /* 0xA4000000: math unit */
     int            dma_log;
@@ -1619,6 +1623,93 @@ static void mc_command(HW *hw, const uint8_t *tx, uint8_t *rx, int n) {
      * answer nothing */
 }
 
+/* The system flash: an SST25VF512, 64 KB, on the SPI with GPIO A2 bit 3
+ * high (MAME's French V.Smile Pro set dumps it as sst25vf512.u5). The ROM's
+ * driver (0x10007E70) knows it by the ID that RES (0xAB) returns, BF 48. At
+ * 0xE000 (else 0xF000) it keeps the console's settings, read by 0x1000C620:
+ *   +0      0x22
+ *   +1..4   "System Option", little endian: bit 0 VTech logo, bit 1 V.Flash
+ *           logo, bits 12-18 the language (0x7A Dutch, 0x7B German, 0x7C
+ *           Spanish, 0x7D French, 0x7E English UK, 0x7F English US)
+ *   +5..12  ProductID
+ *   +13..14 CRC-16 (0x1021, augmented, from 0) of +1..12, little endian
+ * Fitted only when a language is chosen: without it the ROM falls back to
+ * its own default, as it always did here. */
+#define SF_SIZE 0x10000u
+
+static void sf_command(HW *hw, const uint8_t *tx, uint8_t *rx, int n) {
+    uint8_t *f = hw->sf;
+    uint32_t a = ((uint32_t)tx[1] << 16 | tx[2] << 8 | tx[3]) & (SF_SIZE - 1);
+    memset(rx, 0xFF, (size_t)n);
+    switch (tx[0]) {
+    case 0xAB: case 0x90:     /* read ID: manufacturer and device alternate */
+        for (int i = 4; i < n; i++) rx[i] = ((a + (uint32_t)i - 4) & 1) ? 0x48 : 0xBF;
+        return;
+    case 0x05:                /* read status */
+        for (int i = 1; i < n; i++) rx[i] = hw->sf_status;
+        return;
+    case 0x03: case 0x0B: {   /* read, fast read (a dummy byte) */
+        int skip = tx[0] == 0x03 ? 4 : 5;
+        for (int i = skip; i < n; i++) rx[i] = f[(a + (uint32_t)(i - skip)) & (SF_SIZE - 1)];
+        return;
+    }
+    case 0x06: hw->sf_status |= 0x02; return;                     /* WREN */
+    case 0x04: hw->sf_status &= (uint8_t)~0x02; hw->sf_aai = 0; return; /* WRDI */
+    case 0x50: return;                                            /* EWSR */
+    case 0x01: if (n > 1) hw->sf_status = (uint8_t)((hw->sf_status & 0x02) | (tx[1] & 0x0C)); return;
+    }
+    if (!(hw->sf_status & 0x02)) return;   /* the rest need write enable */
+    switch (tx[0]) {
+    case 0x02:                /* byte program: only clears bits */
+        if (n > 4) f[a] &= tx[4];
+        break;
+    case 0xAF:                /* auto address increment: address once, then bytes */
+        if (!hw->sf_aai) {
+            if (n > 4) f[a] &= tx[4];
+            hw->sf_aai = 1;
+            hw->sf_aai_addr = (a + 1) & (SF_SIZE - 1);
+        } else if (n > 1) {
+            f[hw->sf_aai_addr] &= tx[1];
+            hw->sf_aai_addr = (hw->sf_aai_addr + 1) & (SF_SIZE - 1);
+        }
+        return;               /* WEL stays set until WRDI */
+    case 0x20: memset(f + (a & ~0xFFFu), 0xFF, 0x1000); break;   /* 4 KB */
+    case 0x52: memset(f + (a & ~0x7FFFu), 0xFF, 0x8000); break;  /* 32 KB */
+    case 0x60: case 0xC7: memset(f, 0xFF, SF_SIZE); break;       /* chip */
+    default: return;
+    }
+    hw->sf_status &= (uint8_t)~0x02;
+}
+
+static uint16_t sf_crc16(const uint8_t *p, int n) {
+    uint16_t crc = 0;
+    for (int i = 0; i < n; i++) {
+        uint16_t t = 0, b = (uint16_t)((crc >> 8) << 8);
+        for (int k = 0; k < 8; k++) {
+            t = ((t ^ b) & 0x8000) ? (uint16_t)(t << 1 ^ 0x1021) : (uint16_t)(t << 1);
+            b = (uint16_t)(b << 1);
+        }
+        crc = (uint16_t)(((t >> 8 ^ (crc & 0xFF)) << 8) | ((t & 0xFF) ^ p[i]));
+    }
+    return crc;
+}
+
+int hw_set_language(HW *hw, int code) {
+    if (code < 0x7A || code > 0x7F) return 0;
+    if (!hw->sf && !(hw->sf = malloc(SF_SIZE))) return 0;
+    memset(hw->sf, 0xFF, SF_SIZE);
+    hw->sf_status = 0x0C;     /* protected at power-up, as the SST25VF512 is */
+    uint8_t *r = hw->sf + 0xE000;
+    uint32_t option = (uint32_t)code << 12 | 0x3;   /* both logos on */
+    r[0] = 0x22;
+    for (int i = 0; i < 4; i++) r[1 + i] = (uint8_t)(option >> (8 * i));
+    memset(r + 5, 0, 8);      /* ProductID */
+    uint16_t crc = sf_crc16(r + 1, 12);
+    r[13] = (uint8_t)crc;
+    r[14] = (uint8_t)(crc >> 8);
+    return 1;
+}
+
 static void spi_transfer(HW *hw, uint32_t ctrl) {
     int bits = (int)(ctrl >> 16 & 0x3F) + 1, n = bits / 8;
     uint64_t reg = (uint64_t)hw->spi[0x1C >> 2] << 32 | hw->spi[0x20 >> 2];
@@ -1626,9 +1717,11 @@ static void spi_transfer(HW *hw, uint32_t ctrl) {
     if (bits <= 32) reg = (uint64_t)hw->spi[0x1C >> 2] << 32;
     for (int i = 0; i < 8; i++) tx[i] = (uint8_t)(reg >> (56 - 8 * i));
     memset(rx, 0xFF, sizeof(rx));
-    /* GPIO A2 bit 3 low: the card, if one is in */
+    /* GPIO A2 bit 3 low: the card, if one is in; high: the system flash */
     if (hw->mc && n && !(hw->gpio[0].out[2] & 0x08))
         mc_command(hw, tx, rx, n);
+    else if (hw->sf && n && (hw->gpio[0].out[2] & 0x08))
+        sf_command(hw, tx, rx, n);
     uint64_t in = 0;
     for (int i = 0; i < n; i++) in = in << 8 | rx[i];
     if (bits % 8) in = in << (bits % 8) | ((1u << (bits % 8)) - 1);
@@ -2431,6 +2524,7 @@ void hw_destroy(HW *hw) {
     jit_shutdown();
 #endif
     free(hw->mc);
+    free(hw->sf);
     free(hw->ram);
     free(hw);
 }

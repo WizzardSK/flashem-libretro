@@ -29,6 +29,8 @@ static void print_usage(const char *prog) {
         "  --dbg-run    Start interactive debugger (running)\n"
         "  --headless   Run without display\n"
         "  --scale N    Window scale factor (default: 2)\n"
+        "  --language L The console's language: bios, en-us, en-uk, fr, es, de, nl\n"
+        "               (default: flashem.ini's [console] language, else bios)\n"
         "  --load F[@A] Load a program and start it instead of the boot ROM: an ELF,\n"
         "               a BOOT.BIN, or a raw binary at address A (hex)\n"
         "  --entry A    Start the loaded program at address A (hex) instead\n"
@@ -130,6 +132,9 @@ static int choose_disc(char *out, size_t size) {
 /* The console restarted with another disc in the drive, as when a disc is
  * changed with the power off: the memory card is written back and inserted
  * again. 0 when the disc cannot be opened; the running console then stays. */
+/* --language, else flashem.ini's: kept for every console started */
+static const char *s_language;
+
 static int switch_disc(VFlash **vf, Audio **audio, const char *disc_path, const char *memcard) {
     if (memcard && !vflash_memcard_save(*vf, memcard))
         fprintf(stderr, "[Main] could not write memory card %s\n", memcard);
@@ -140,6 +145,7 @@ static int switch_disc(VFlash **vf, Audio **audio, const char *disc_path, const 
     }
     vflash_destroy(*vf);
     *vf = next;
+    vflash_set_language(next, s_language);
     if (memcard && !vflash_memcard_load(next, memcard))
         fprintf(stderr, "[Main] could not read memory card %s\n", memcard);
     vflash_init_audio(next);
@@ -163,6 +169,7 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--debug") == 0)        debug    = 1;
         else if (strcmp(argv[i], "--headless") == 0) headless = 1;
+        else if (strcmp(argv[i], "--language") == 0 && i+1 < argc) s_language = argv[++i];
         else if (strcmp(argv[i], "--dbg") == 0)      dbg_mode = 1;
         else if (strcmp(argv[i], "--dbg-run") == 0)  dbg_mode = 2;
         else if (strcmp(argv[i], "--help") == 0)    { print_usage(argv[0]); return 0; }
@@ -247,6 +254,9 @@ int main(int argc, char **argv) {
         fprintf(stderr, "[SDL] No gamepad support: %s\n", SDL_GetError());
     if (!headless)
         input_config_load(base_dir);
+    if (!s_language) s_language = input_config_language();
+    if (!vflash_set_language(vf, s_language))
+        fprintf(stderr, "[Main] unknown language \"%s\"\n", s_language);
 
     vflash_init_audio(vf);
 

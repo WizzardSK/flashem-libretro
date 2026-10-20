@@ -18,6 +18,10 @@ enum {
  * default bindings when it does not exist. dir may be NULL. */
 void input_config_load(const char *dir);
 
+/* The console's language from flashem.ini's [console] section (see
+ * vflash_set_language), or NULL when it names none. */
+const char *input_config_language(void);
+
 /* Gamepads coming and going (SDL_CONTROLLERDEVICEADDED / REMOVED). */
 void input_handle_event(const SDL_Event *ev);
 

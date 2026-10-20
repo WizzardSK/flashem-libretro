@@ -2,6 +2,10 @@
 
 What changed in FlashEm, newest first. Releases are builds of the libretro core and, from v0.3, of the standalone emulator too.
 
+## Unreleased
+
+- The console's language can be chosen: English (US), English (UK), French, Spanish, German or Dutch, kept in the console's system flash as on the real hardware. Core option Console Language, `[console] language` in `flashem.ini`, or `--language` (SatellaGuyAlt, #5).
+
 ## v0.5 - 2026-10-20
 
 - Faster, most of all in the libretro cores for 64-bit hosts: the ARM9 runs on the [dynarmic](https://github.com/azahar-emu/dynarmic) JIT recompiler instead of the interpreter (Linux, Windows x64, macOS arm64, Android arm64-v8a and x86_64; the 32-bit Android cores and the standalone keep the interpreter). The interpreter still executes what dynarmic gives back - changes of CPU mode, CP15, exceptions - and takes interrupts. A new core option, CPU Emulation (JIT / Interpreter, at the next start), goes back to the interpreter. SpongeBob's first 1500 frames: 95 s instead of 128 on a Snapdragon 7c (#5).

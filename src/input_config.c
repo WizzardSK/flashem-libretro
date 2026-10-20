@@ -126,7 +126,15 @@ static void write_defaults(const char *path) {
     fprintf(f, "\n[gamepad]\n");
     for (size_t i = 0; i < NACTIONS; i++)
         fprintf(f, "%s = %s\n", actions[i].name, actions[i].pad);
+    fprintf(f, "\n; The console's language: bios (the boot ROM's own), en-us, en-uk, fr, es,\n"
+               "; de or nl. It takes effect at the next start.\n[console]\nlanguage = bios\n");
     fclose(f);
+}
+
+static char language[16];
+
+const char *input_config_language(void) {
+    return language[0] ? language : NULL;
 }
 
 void input_config_load(const char *dir) {
@@ -144,12 +152,13 @@ void input_config_load(const char *dir) {
         return;
     }
     char line[512];
-    int gamepad = 0;
+    int gamepad = 0, console = 0;
     while (fgets(line, sizeof(line), f)) {
         char *s = trim(line);
         if (!*s || *s == ';' || *s == '#') continue;
         if (*s == '[') {
             gamepad = strncmp(s, "[gamepad]", 9) == 0;
+            console = strncmp(s, "[console]", 9) == 0;
             continue;
         }
         char *eq = strchr(s, '=');
@@ -157,6 +166,13 @@ void input_config_load(const char *dir) {
         *eq = '\0';
         const char *name = trim(s);
         const char *value = trim(eq + 1);
+        if (console) {
+            if (!strcmp(name, "language"))
+                snprintf(language, sizeof(language), "%s", value);
+            else
+                fprintf(stderr, "[Input] flashem.ini: unknown console setting \"%s\"\n", name);
+            continue;
+        }
         size_t i = 0;
         for (; i < NACTIONS && strcmp(actions[i].name, name) != 0; i++)
             ;
