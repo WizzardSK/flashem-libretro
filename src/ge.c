@@ -313,8 +313,13 @@ static int use_half(void) {
 
 double ge_f16_to(uint16_t h) {
     if (!(h & 0x7FFF)) return 0;
-    double v = ldexp(1.0 + (h & 511) / 512.0, (h >> 9 & 63) - 31);
-    return h & 0x8000 ? -v : v;
+    /* (1 + m/512) * 2^(e-31) put together as a double's bits - the same
+     * value ldexp gave, without a libm call per vertex coordinate */
+    uint64_t bits = (uint64_t)(h & 0x8000) << 48 | (uint64_t)((h >> 9 & 63) - 31 + 1023) << 52 |
+                    (uint64_t)(h & 511) << 43;
+    double v;
+    memcpy(&v, &bits, sizeof v);
+    return v;
 }
 
 uint16_t ge_f16_from(double v) {
@@ -482,7 +487,29 @@ static void tex_setup(GE *g) {
     tc.soff = (int32_t)(g->surface - RAM_BASE);
     tc.ram = g->ram;
     int n = bpp == 4 ? 16 : bpp == 8 ? 256 : 0;
-    for (int i = 0; i < n; i++) tc.pal[i] = pal_colour(g, i);
+    /* The palette row, decoded again only when its words or format changed:
+     * every textured triangle sets the texture up, mostly with the palette
+     * of the one before (SpongeBob's beach: ~10 % of the time went here) */
+    static uint16_t raw[256], last_raw[256];
+    static int last_n = -1, last_4444;
+    int direct = n && g->pal_x >= 0 && g->pal_x + n <= 1024 && g->pal_y >= g->top;
+    if (direct) {
+        uint32_t o = g->surface + (uint32_t)(g->pal_y >> 3) * 16384 + (uint32_t)(g->pal_y & 7) * 64 - RAM_BASE;
+        direct = (uint64_t)o + 16384 <= g->ram_size;
+        if (direct)
+            for (int i = 0; i < n; i++) {
+                int x = g->pal_x + i;
+                memcpy(&raw[i], g->ram + o + (x >> 5) * 512 + (x & 31) * 2, 2);
+            }
+    }
+    if (direct && n == last_n && tc.a4444 == last_4444 && !memcmp(raw, last_raw, (size_t)n * 2))
+        ;   /* tc.pal still holds it */
+    else {
+        for (int i = 0; i < n; i++) tc.pal[i] = pal_colour(g, i);
+        last_n = direct ? n : -1;
+        last_4444 = tc.a4444;
+        if (direct) memcpy(last_raw, raw, (size_t)n * 2);
+    }
     tc.ok = 1;
 }
 
@@ -704,7 +731,9 @@ static void tri(GE *g, V3 a, V3 b, V3 c) {
     if (clip < 0) clip = !getenv("VFLASH_CLIP") || atoi(getenv("VFLASH_CLIP"));
     if ((!a.ok && !b.ok && !c.ok) || !clip) return;
     float nz = near_z(g);
-    if (getenv("VFLASH_CLIPLOG")) {
+    static int cliplog = -1;
+    if (cliplog < 0) cliplog = getenv("VFLASH_CLIPLOG") != NULL;
+    if (cliplog) {
         static int n;
         if (n++ < 40) printf("[CLIP] z %.3f %.3f %.3f  vx %.2f %.2f %.2f  vy %.2f %.2f %.2f near %.4f c %04X\n",
                              a.z, b.z, c.z, a.vx, b.vx, c.vx, a.vy, b.vy, c.vy, nz, a.c);
