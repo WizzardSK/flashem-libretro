@@ -235,8 +235,11 @@ void prof_report() {
         char key[256];
         if (dladdr((void *)prof_pc[i], &info) && info.dli_fname) {
             const char *f = strrchr(info.dli_fname, '/');
-            snprintf(key, sizeof key, "%s+%lx", f ? f + 1 : info.dli_fname,
-                     (unsigned long)(prof_pc[i] - (std::uintptr_t)info.dli_fbase) & ~0x3Ful);
+            if (info.dli_sname && !strstr(info.dli_fname, "flashem"))
+                snprintf(key, sizeof key, "%s:%s", f ? f + 1 : info.dli_fname, info.dli_sname);
+            else
+                snprintf(key, sizeof key, "%s+%lx", f ? f + 1 : info.dli_fname,
+                         (unsigned long)(prof_pc[i] - (std::uintptr_t)info.dli_fbase) & ~0x3Ful);
         } else {
             snprintf(key, sizeof key, "jit-code");
         }
@@ -517,6 +520,11 @@ extern "C" void jit_stats(void) {
     static const bool on = getenv("VFLASH_JITSTATS") != nullptr;
     if (!g_bridge || !on) return;
     Bridge &b = *g_bridge;
+    static timespec last;
+    timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    printf("[JIT] wall %lld ms\n", last.tv_sec ? (long long)((now.tv_sec - last.tv_sec) * 1000 + (now.tv_nsec - last.tv_nsec) / 1000000) : 0LL);
+    last = now;
     printf("[JIT] runs %llu, given back %llu, code words read %llu, lines invalidated %llu, clears %llu, "
            "memory accesses %llu, cycles %llu, %llu ms in Run\n",
            (unsigned long long)b.n_runs, (unsigned long long)b.n_back, (unsigned long long)b.n_code,
