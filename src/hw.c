@@ -167,6 +167,7 @@ struct HW {
     struct { uint32_t tag, pa; uint8_t *rd, *wr; } tlb[TLB_SIZE];
     uint32_t       tlb_gen;       /* CP15 tlb_gen the entries belong to */
     uint8_t        pt_page[RAM_SIZE >> 12];  /* RAM pages a table walk has read */
+    uint32_t       pt_ttb;        /* the CP15 TTB those walks went from */
     uint32_t       ge_started;    /* command lists run since power-on */
     uint32_t       idle_slices;   /* 256-cycle slices of idle loop passed over (report) */
 };
@@ -2147,6 +2148,12 @@ static uint32_t walk(HW *hw, uint32_t va, int *fault, int *small) {
 /* Also moves CP15's generation on, which drops the CPU's fetch page. */
 static void tlb_flush(HW *hw) {
     memset(hw->tlb, 0, sizeof hw->tlb);
+    /* Tables of an old TTB are plain memory again: BOOT.BIN copies the game
+     * kernel over the ROM kernel's tables, and every store there flushed. */
+    if (hw->cpu->cp15.ttb != hw->pt_ttb) {
+        memset(hw->pt_page, 0, sizeof hw->pt_page);
+        hw->pt_ttb = hw->cpu->cp15.ttb;
+    }
     hw->tlb_gen = ++hw->cpu->cp15.tlb_gen;
 }
 
