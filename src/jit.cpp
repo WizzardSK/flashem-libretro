@@ -222,7 +222,7 @@ extern "C" int jit_init(ARM9 *cpu) {
     config.callbacks = b;
     config.arch_version = Dynarmic::A32::ArchVersion::v5TE;
     // a device write that raises an interrupt stops the code right there
-    config.check_halt_on_memory_access = true;
+    config.check_halt_on_memory_access = !(getenv("VFLASH_JITHALTMEM") && *getenv("VFLASH_JITHALTMEM") == '0');
     // RAM without the callbacks (not with the lockstep check, which needs
     // to see every access); misaligned halfwords and words still take them,
     // for ARMv5's alignment
