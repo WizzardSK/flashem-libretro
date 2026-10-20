@@ -309,6 +309,11 @@ extern "C" int jit_init(ARM9 *cpu) {
     }
     // CP15 is the interpreter's: tools/dynarmic.patch gives every
     // coprocessor instruction back
+    // Not GetSetElimination: it drops register and flag writes a halt in the
+    // middle of a block (check_halt_on_memory_access) still needs - dynarmic
+    // turns it off for A64 in that case, not for A32 - and with it SpongeBob's
+    // kernel never got its timer interrupt going.
+    config.optimizations = Dynarmic::all_safe_optimizations & ~Dynarmic::OptimizationFlag::GetSetElimination;
     // VFLASH_JITOPT=<hex> (debugging): dynarmic's optimisation flags
     if (getenv("VFLASH_JITOPT"))
         config.optimizations = static_cast<Dynarmic::OptimizationFlag>(strtoul(getenv("VFLASH_JITOPT"), nullptr, 16));
