@@ -74,7 +74,7 @@ struct Bridge final : Dynarmic::A32::UserCallbacks {
     // VFLASH_JITSTATS: runs, instructions given back, code words read
     // (translation), lines invalidated, full clears
     std::uint64_t n_runs = 0, n_back = 0, n_code = 0, n_inval = 0, n_clear = 0;
-    std::uint64_t n_mem = 0, n_ticks = 0, ns_run = 0, ns_back = 0;
+    std::uint64_t n_mem = 0, n_ticks = 0, ns_run = 0, ns_back = 0, n_msr = 0;
     // VFLASH_JITSTATS: where instructions were given back (PC | Thumb)
     std::unordered_map<std::uint32_t, std::uint64_t> back_at;
 
@@ -191,10 +191,43 @@ struct Bridge final : Dynarmic::A32::UserCallbacks {
     void ExceptionRaised(std::uint32_t pc, Dynarmic::A32::Exception) override { give_back(pc, 1); }
     // dynarmic is past the SWI when it calls this: jit_run steps back to it
     // and has the interpreter execute it, entering the exception as the
-    // hardware would
-    void CallSVC(std::uint32_t) override {
+    // hardware would. Numbers with bit 31 are MSRs of the control field
+    // (tools/dynarmic.patch).
+    void CallSVC(std::uint32_t imm) override {
+        if (imm & 0x80000000u) {
+            msr(imm);
+            return;
+        }
         svc = true;
         give_back(0, 1);
+    }
+
+    // MSR CPSR with the control field, as the interpreter does it: here when
+    // the mode stays (masking or unmasking interrupts, the kernel's most
+    // frequent instruction), on the interpreter when it changes, for the
+    // banked registers. Unmasking a pending interrupt stops the run, for
+    // hw.c to take it.
+    const int *irq_lines = nullptr;
+    void msr(std::uint32_t imm) {
+        const std::uint32_t field = imm >> 16 & 0xF;
+        std::uint32_t v;
+        if (imm & 0x40000000u) {
+            const std::uint32_t i8 = imm & 0xFF, rot = (imm >> 8 & 0xF) * 2;
+            v = rot ? (i8 >> rot) | (i8 << (32 - rot)) : i8;
+        } else {
+            v = jit->Regs()[imm & 0xF];
+        }
+        const std::uint32_t mask = (field & 8 ? 0xF0000000u : 0) | (field & 1 ? 0xDFu : 0);
+        const std::uint32_t old = jit->Cpsr(), cpsr = (old & ~mask) | (v & mask);
+        if ((cpsr ^ old) & 0x1F) {
+            give_back(jit->Regs()[15], 1);
+            return;
+        }
+        jit->SetCpsr(cpsr);
+        n_msr++;
+        const std::uint32_t unmasked = old & ~cpsr;
+        if (irq_lines && (((unmasked & 0x80) && irq_lines[0]) || ((unmasked & 0x40) && irq_lines[1])))
+            jit->HaltExecution(HALT_IRQ);
     }
 
     void AddTicks(std::uint64_t ticks) override { used += ticks; }
@@ -547,10 +580,10 @@ extern "C" void jit_stats(void) {
     printf("[JIT] wall %lld ms\n", last.tv_sec ? (long long)((now.tv_sec - last.tv_sec) * 1000 + (now.tv_nsec - last.tv_nsec) / 1000000) : 0LL);
     last = now;
     printf("[JIT] runs %llu, given back %llu, code words read %llu, lines invalidated %llu, clears %llu, "
-           "memory accesses %llu, cycles %llu, %llu ms in Run\n",
+           "memory accesses %llu, cycles %llu, %llu ms in Run, MSRs %llu\n",
            (unsigned long long)b.n_runs, (unsigned long long)b.n_back, (unsigned long long)b.n_code,
            (unsigned long long)b.n_inval, (unsigned long long)b.n_clear, (unsigned long long)b.n_mem,
-           (unsigned long long)b.n_ticks, (unsigned long long)(b.ns_run / 1000000));
+           (unsigned long long)b.n_ticks, (unsigned long long)(b.ns_run / 1000000), (unsigned long long)b.n_msr);
     if (getenv("VFLASH_JITPROF")) prof_report();
     {
         std::vector<std::pair<std::uint64_t, std::uint32_t>> top;
@@ -564,11 +597,15 @@ extern "C" void jit_stats(void) {
         }
         b.back_at.clear();
     }
-    b.n_runs = b.n_back = b.n_code = b.n_inval = b.n_clear = b.n_mem = b.n_ticks = b.ns_run = 0;
+    b.n_runs = b.n_back = b.n_code = b.n_inval = b.n_clear = b.n_mem = b.n_ticks = b.ns_run = b.n_msr = 0;
 }
 
 extern "C" void jit_interrupt(void) {
     if (g_bridge && g_bridge->running) g_bridge->jit->HaltExecution(HALT_IRQ);
+}
+
+extern "C" void jit_irq_lines(const int *lines) {
+    if (g_bridge) g_bridge->irq_lines = lines;
 }
 
 extern "C" void jit_reset(void) {

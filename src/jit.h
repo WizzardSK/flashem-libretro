@@ -31,6 +31,9 @@ void jit_note_write(uint32_t addr, size_t len);
 /* An interrupt line came up: the running code stops at the next memory
  * access, so that it is taken there */
 void jit_interrupt(void);
+/* The interrupt controller's IRQ and FIQ outputs, for an MSR that unmasks
+ * one to stop at */
+void jit_irq_lines(const int *lines);
 /* The CPU was reset by a device write: the running code stops there and
  * leaves the reset state alone */
 void jit_reset(void);

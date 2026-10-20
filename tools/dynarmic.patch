@@ -33,7 +33,7 @@ index 276f8384..7cab6d26 100644
  
  bool TranslatorVisitor::UnpredictableInstruction() {
 diff --git a/src/dynarmic/frontend/A32/translate/impl/coprocessor.cpp b/src/dynarmic/frontend/A32/translate/impl/coprocessor.cpp
-index 29748a6e..b0fc8b26 100644
+index 29748a6e..064f4144 100644
 --- a/src/dynarmic/frontend/A32/translate/impl/coprocessor.cpp
 +++ b/src/dynarmic/frontend/A32/translate/impl/coprocessor.cpp
 @@ -9,6 +9,9 @@ namespace Dynarmic::A32 {
@@ -56,17 +56,23 @@ index 29748a6e..b0fc8b26 100644
      if (!p && !u && !d && !w) {
          return arm_UDF();
      }
-@@ -54,6 +60,9 @@ bool TranslatorVisitor::arm_LDC(Cond cond, bool p, bool u, bool d, bool w, Reg n
+@@ -54,6 +60,15 @@ bool TranslatorVisitor::arm_LDC(Cond cond, bool p, bool u, bool d, bool w, Reg n
  
  // MCR{2}<c> <coproc_no>, #<opc1>, <Rt>, <CRn>, <CRm>, #<opc2>
  bool TranslatorVisitor::arm_MCR(Cond cond, size_t opc1, CoprocReg CRn, Reg t, size_t coproc_no, size_t opc2, CoprocReg CRm) {
++    // flashem: CP15's cache operations (c7) do nothing on the host - caches
++    // are not modelled, and wait-for-interrupt is the idle skip's - so they
++    // stay in the block rather than leaving it a line at a time
++    if (coproc_no == 15 && CRn == CoprocReg::C7) {
++        return true;
++    }
 +    // flashem: the coprocessors (CP15) are the host interpreter's
 +    return InterpretThisInstruction();
 +
      if ((coproc_no & 0b1110) == 0b1010) {
          return arm_UDF();
      }
-@@ -72,6 +81,9 @@ bool TranslatorVisitor::arm_MCR(Cond cond, size_t opc1, CoprocReg CRn, Reg t, si
+@@ -72,6 +87,9 @@ bool TranslatorVisitor::arm_MCR(Cond cond, size_t opc1, CoprocReg CRn, Reg t, si
  
  // MCRR{2}<c> <coproc_no>, #<opc>, <Rt>, <Rt2>, <CRm>
  bool TranslatorVisitor::arm_MCRR(Cond cond, Reg t2, Reg t, size_t coproc_no, size_t opc, CoprocReg CRm) {
@@ -76,7 +82,7 @@ index 29748a6e..b0fc8b26 100644
      if ((coproc_no & 0b1110) == 0b1010) {
          return arm_UDF();
      }
-@@ -90,6 +102,9 @@ bool TranslatorVisitor::arm_MCRR(Cond cond, Reg t2, Reg t, size_t coproc_no, siz
+@@ -90,6 +108,9 @@ bool TranslatorVisitor::arm_MCRR(Cond cond, Reg t2, Reg t, size_t coproc_no, siz
  
  // MRC{2}<c> <coproc_no>, #<opc1>, <Rt>, <CRn>, <CRm>, #<opc2>
  bool TranslatorVisitor::arm_MRC(Cond cond, size_t opc1, CoprocReg CRn, Reg t, size_t coproc_no, size_t opc2, CoprocReg CRm) {
@@ -86,7 +92,7 @@ index 29748a6e..b0fc8b26 100644
      if ((coproc_no & 0b1110) == 0b1010) {
          return arm_UDF();
      }
-@@ -110,6 +125,9 @@ bool TranslatorVisitor::arm_MRC(Cond cond, size_t opc1, CoprocReg CRn, Reg t, si
+@@ -110,6 +131,9 @@ bool TranslatorVisitor::arm_MRC(Cond cond, size_t opc1, CoprocReg CRn, Reg t, si
  
  // MRRC{2}<c> <coproc_no>, #<opc>, <Rt>, <Rt2>, <CRm>
  bool TranslatorVisitor::arm_MRRC(Cond cond, Reg t2, Reg t, size_t coproc_no, size_t opc, CoprocReg CRm) {
@@ -96,7 +102,7 @@ index 29748a6e..b0fc8b26 100644
      if ((coproc_no & 0b1110) == 0b1010) {
          return arm_UDF();
      }
-@@ -132,6 +150,9 @@ bool TranslatorVisitor::arm_MRRC(Cond cond, Reg t2, Reg t, size_t coproc_no, siz
+@@ -132,6 +156,9 @@ bool TranslatorVisitor::arm_MRRC(Cond cond, Reg t2, Reg t, size_t coproc_no, siz
  // STC{2}{L}<c> <coproc>, <CRd>, [<Rn>], #+/-<imm32>
  // STC{2}{L}<c> <coproc>, <CRd>, [<Rn>], <imm8>
  bool TranslatorVisitor::arm_STC(Cond cond, bool p, bool u, bool d, bool w, Reg n, CoprocReg CRd, size_t coproc_no, Imm<8> imm8) {
@@ -107,29 +113,50 @@ index 29748a6e..b0fc8b26 100644
          return arm_UDF();
      }
 diff --git a/src/dynarmic/frontend/A32/translate/impl/status_register_access.cpp b/src/dynarmic/frontend/A32/translate/impl/status_register_access.cpp
-index 60110df8..d76023f9 100644
+index 60110df8..29b2046d 100644
 --- a/src/dynarmic/frontend/A32/translate/impl/status_register_access.cpp
 +++ b/src/dynarmic/frontend/A32/translate/impl/status_register_access.cpp
-@@ -33,6 +33,12 @@ bool TranslatorVisitor::arm_MRS(Cond cond, Reg d) {
+@@ -33,6 +33,25 @@ bool TranslatorVisitor::arm_MRS(Cond cond, Reg d) {
  bool TranslatorVisitor::arm_MSR_imm(Cond cond, unsigned mask, int rotate, Imm<8> imm8) {
      ASSERT_MSG(mask != 0, "Decode error");
  
 +    // flashem: the control field (mode, I, F) belongs to the host, whose
-+    // interpreter keeps the banked registers of each mode
++    // interpreter keeps the banked registers of each mode. The host gets the
++    // instruction as an SVC call outside the 24-bit SWI numbers (bit 31, bit
++    // 30 for an immediate, the field mask in bits 16-19, the rotate and imm8
++    // or the register below) and writes the CPSR itself - or, for a change
++    // of mode, halts and runs it on its interpreter (the PC is the MSR's
++    // during the call).
 +    if (mcl::bit::get_bit<0>(mask)) {
-+        return InterpretThisInstruction();
++        if (!ArmConditionPassed(cond)) {
++            return true;
++        }
++        ir.UpdateUpperLocationDescriptor();
++        ir.BranchWritePC(ir.Imm32(ir.current_location.PC()));
++        ir.CallSupervisor(ir.Imm32(0xC0000000 | (mask << 16) | (static_cast<u32>(rotate) << 8) | imm8.ZeroExtend()));
++        ir.BranchWritePC(ir.Imm32(ir.current_location.PC() + 4));
++        ir.SetTerm(IR::Term::CheckHalt{IR::Term::LinkBlock{ir.current_location.AdvancePC(4)}});
++        return false;
 +    }
 +
      if (!ArmConditionPassed(cond)) {
          return true;
      }
-@@ -67,6 +73,11 @@ bool TranslatorVisitor::arm_MSR_reg(Cond cond, unsigned mask, Reg n) {
+@@ -67,6 +86,19 @@ bool TranslatorVisitor::arm_MSR_reg(Cond cond, unsigned mask, Reg n) {
          return UnpredictableInstruction();
      }
  
 +    // flashem: as arm_MSR_imm
-+    if (mcl::bit::get_bit<0>(mask)) {
-+        return InterpretThisInstruction();
++    if (mcl::bit::get_bit<0>(mask) && n != Reg::PC) {
++        if (!ArmConditionPassed(cond)) {
++            return true;
++        }
++        ir.UpdateUpperLocationDescriptor();
++        ir.BranchWritePC(ir.Imm32(ir.current_location.PC()));
++        ir.CallSupervisor(ir.Imm32(0x80000000 | (mask << 16) | static_cast<u32>(n)));
++        ir.BranchWritePC(ir.Imm32(ir.current_location.PC() + 4));
++        ir.SetTerm(IR::Term::CheckHalt{IR::Term::LinkBlock{ir.current_location.AdvancePC(4)}});
++        return false;
 +    }
 +
      if (n == Reg::PC) {
