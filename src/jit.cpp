@@ -15,7 +15,8 @@
  * a 64-byte line the JIT read code from is marked, and a write to it - by the CPU,
  * or DMA and program loading through jit_note_write (by physical address,
  * the kernel mapping RAM one to one) - drops what was translated from it.
- * A change of the MMU's table or control register drops everything. */
+ * A change of the MMU's table, domains, process ID or control register
+ * (by MCR or a reset) drops everything. */
 #include "jit.h"
 
 extern "C" {
@@ -48,6 +49,8 @@ struct Bridge final : Dynarmic::A32::UserCallbacks {
     std::uint64_t budget = 0, used = 0;
     // An instruction for the interpreter, the JIT halted before it
     bool fallback = false, svc = false, running = false;
+    // the MMU state the code cache was translated under
+    CP15 mmu{};
     std::uint32_t fallback_pc = 0;
     std::size_t fallback_count = 0;
     // 64-byte lines code was translated from: games write data right next
@@ -217,6 +220,15 @@ namespace {
 // One run of dynarmic - or with step, one instruction - and the
 // instructions it gave back; true if it gave any back
 bool run_once(Bridge &b, ARM9 *cpu, std::uint64_t stop, bool step) {
+    // An MMU change - by MCR, or a reset through a device - leaves the code
+    // cache translated by stale mappings
+    if (cpu->cp15.ttb != b.mmu.ttb || cpu->cp15.control != b.mmu.control
+        || cpu->cp15.domain != b.mmu.domain || cpu->cp15.pid != b.mmu.pid) {
+        b.mmu = cpu->cp15;
+        b.n_clear++;
+        b.jit->ClearCache();
+        b.forget_code();
+    }
     b.budget = stop > cpu->cycles ? stop - cpu->cycles : 1;
     // VFLASH_JITBUDGET=<n> (debugging): runs of at most n cycles
     static const std::uint64_t cap = getenv("VFLASH_JITBUDGET") ? strtoull(getenv("VFLASH_JITBUDGET"), nullptr, 0) : 0;
@@ -251,9 +263,7 @@ bool run_once(Bridge &b, ARM9 *cpu, std::uint64_t stop, bool step) {
     cpu->cycles += b.used;
     if (!b.fallback) return false;
     b.n_back += b.fallback_count;
-    // the instructions dynarmic gave back, by the interpreter; an MMU change
-    // among them means the code cache is translated by stale mappings
-    const CP15 mmu = cpu->cp15;
+    // the instructions dynarmic gave back, by the interpreter
     cpu->r[15] = b.svc ? cpu->r[15] - (cpu->thumb ? 2 : 4) : b.fallback_pc;
     for (std::size_t i = 0; i < b.fallback_count; i++) {
         // VFLASH_JITLOG=<n>: the first n instructions given back, for debugging
@@ -269,12 +279,6 @@ bool run_once(Bridge &b, ARM9 *cpu, std::uint64_t stop, bool step) {
             continue;
         }
         arm9_step(cpu);
-    }
-    if (cpu->cp15.ttb != mmu.ttb || cpu->cp15.control != mmu.control
-        || cpu->cp15.domain != mmu.domain || cpu->cp15.pid != mmu.pid) {
-        b.n_clear++;
-        b.jit->ClearCache();
-        b.forget_code();
     }
     return true;
 }
