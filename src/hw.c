@@ -1371,12 +1371,12 @@ static void dmac_run(HW *hw, int ch) {
     uint32_t src = c[1], dst = c[2];
     uint8_t *s = cd_ram(hw, src, len), *d = cd_ram(hw, dst, len);
     if (s && d) memmove(d, s, len);
-    jit_note_write(dst, len);
     else {
         /* A device on one side: move it a word at a time over the bus. */
         for (uint32_t i = 0; i < len; i += 4)
             hw_write32(hw, dst + i, hw_read32(hw, src + i));
     }
+    jit_note_write(dst, len);
     if (hw->watch_len && dst < hw->watch_lo + hw->watch_len && hw->watch_lo < dst + len)
         printf("[WATCH] DMAC ch%d %08X -> %08X, %u bytes frame %lu\n", ch, src, dst, len,
                (unsigned long)hw->frame);
