@@ -26,6 +26,7 @@ extern "C" {
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <algorithm>
 #include <memory>
 #include <optional>
@@ -51,6 +52,7 @@ struct Bridge final : Dynarmic::A32::UserCallbacks {
     // VFLASH_JITSTATS: runs, instructions given back, code words read
     // (translation), pages invalidated, full clears
     std::uint64_t n_runs = 0, n_back = 0, n_code = 0, n_inval = 0, n_clear = 0;
+    std::uint64_t n_mem = 0, n_ticks = 0, ns_run = 0, ns_back = 0;
 
     void *ctx() const { return cpu->mem_ctx; }
 
@@ -73,11 +75,13 @@ struct Bridge final : Dynarmic::A32::UserCallbacks {
     std::vector<Access> accesses;
 
     std::uint32_t rd(std::uint32_t va, std::uint8_t size) {
+        n_mem++;
         std::uint32_t v = size == 4 ? cpu->mem_read32(ctx(), va) : size == 2 ? cpu->mem_read16(ctx(), va) : cpu->mem_read8(ctx(), va);
         if (rec) accesses.push_back({va, v, size, false});
         return v;
     }
     void wr(std::uint32_t va, std::uint32_t v, std::uint8_t size) {
+        n_mem++;
         if (rec) accesses.push_back({va, v, size, true});
         if (size == 4) cpu->mem_write32(ctx(), va, v);
         else if (size == 2) cpu->mem_write16(ctx(), va, (std::uint16_t)v);
@@ -200,7 +204,15 @@ bool run_once(Bridge &b, ARM9 *cpu, std::uint64_t stop, bool step) {
     load_state(b);
     b.jit->ClearHalt(HALT_FALLBACK);
     b.n_runs++;
+    static const bool timed = getenv("VFLASH_JITSTATS") != nullptr;
+    timespec t0, t1;
+    if (timed) clock_gettime(CLOCK_MONOTONIC, &t0);
     if (step) b.jit->Step(); else b.jit->Run();
+    if (timed) {
+        clock_gettime(CLOCK_MONOTONIC, &t1);
+        b.ns_run += (t1.tv_sec - t0.tv_sec) * 1000000000ull + t1.tv_nsec - t0.tv_nsec;
+    }
+    b.n_ticks += b.used;
     store_state(b);
     cpu->cycles += b.used;
     if (!b.fallback) return false;
@@ -343,10 +355,12 @@ extern "C" void jit_stats(void) {
     static const bool on = getenv("VFLASH_JITSTATS") != nullptr;
     if (!g_bridge || !on) return;
     Bridge &b = *g_bridge;
-    printf("[JIT] runs %llu, given back %llu, code words read %llu, pages invalidated %llu, clears %llu\n",
+    printf("[JIT] runs %llu, given back %llu, code words read %llu, pages invalidated %llu, clears %llu, "
+           "memory accesses %llu, cycles %llu, %llu ms in Run\n",
            (unsigned long long)b.n_runs, (unsigned long long)b.n_back, (unsigned long long)b.n_code,
-           (unsigned long long)b.n_inval, (unsigned long long)b.n_clear);
-    b.n_runs = b.n_back = b.n_code = b.n_inval = b.n_clear = 0;
+           (unsigned long long)b.n_inval, (unsigned long long)b.n_clear, (unsigned long long)b.n_mem,
+           (unsigned long long)b.n_ticks, (unsigned long long)(b.ns_run / 1000000));
+    b.n_runs = b.n_back = b.n_code = b.n_inval = b.n_clear = b.n_mem = b.n_ticks = b.ns_run = 0;
 }
 
 extern "C" void jit_note_write(std::uint32_t pa, std::size_t len) {
