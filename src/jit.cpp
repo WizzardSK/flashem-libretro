@@ -373,7 +373,9 @@ extern "C" void jit_run(ARM9 *cpu, std::uint64_t stop) {
         b.forget_code();
     }
     static long check_left = getenv("VFLASH_JITCHECK") ? atol(getenv("VFLASH_JITCHECK")) : 0;
-    if (check_left > 0) {
+    // VFLASH_JITCHECK_FROM=<cycle>: start checking there
+    static const std::uint64_t check_from = getenv("VFLASH_JITCHECK_FROM") ? strtoull(getenv("VFLASH_JITCHECK_FROM"), nullptr, 0) : 0;
+    if (check_left > 0 && cpu->cycles >= check_from) {
         while (cpu->cycles < stop && check_left > 0) check_step(b, cpu, stop, check_left);
         return;
     }
