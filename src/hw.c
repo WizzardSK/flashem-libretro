@@ -758,14 +758,26 @@ static void pad_send(HW *hw, int u, const uint8_t *p, int n) {
 /* The buttons the controller and the console's keys see: the frontend's, plus VFLASH_INPUT=
  * <hex VFLASH_BTN mask>@<from>-<to>[;...] for scripted headless runs. */
 static uint32_t pad_buttons(HW *hw) {
-    uint32_t in = hw->input;
-    const char *e = ENV_ONCE("VFLASH_INPUT");
-    while (e && *e) {
-        unsigned long m = 0, a = 0, b = 0;
-        if (sscanf(e, "%lx@%lu-%lu", &m, &a, &b) == 3 && hw->frame >= a && hw->frame < b) in |= (uint32_t)m;
-        e = strchr(e, ';');
-        if (e) e++;
+    /* VFLASH_INPUT, parsed once: the PMU poll reads the buttons, and a long
+     * script went through sscanf on every read */
+    static struct { uint32_t m; uint64_t a, b; } *ev;
+    static int nev = -1;
+    if (nev < 0) {
+        const char *e = ENV_ONCE("VFLASH_INPUT");
+        nev = 0;
+        for (const char *p = e; p && *p; ) {
+            unsigned long m = 0, a = 0, b = 0;
+            if (sscanf(p, "%lx@%lu-%lu", &m, &a, &b) == 3) {
+                ev = realloc(ev, (size_t)(nev + 1) * sizeof *ev);
+                ev[nev].m = (uint32_t)m; ev[nev].a = a; ev[nev].b = b; nev++;
+            }
+            p = strchr(p, ';');
+            if (p) p++;
+        }
     }
+    uint32_t in = hw->input;
+    for (int i = 0; i < nev; i++)
+        if (hw->frame >= ev[i].a && hw->frame < ev[i].b) in |= ev[i].m;
     return in;
 }
 
