@@ -161,6 +161,15 @@ extern "C" int jit_active(void) { return g_bridge != nullptr; }
 extern "C" void jit_run(ARM9 *cpu, std::uint64_t stop) {
     Bridge &b = *g_bridge;
     if (cpu->cycles >= stop) return;
+    // VFLASH_JITFLUSH (debugging): 1 drops all translated code before every
+    // run, 2 whenever the TLB was flushed or a page table written
+    static const int flush = getenv("VFLASH_JITFLUSH") ? atoi(getenv("VFLASH_JITFLUSH")) : 0;
+    static std::uint32_t flush_gen;
+    if (flush == 1 || (flush == 2 && cpu->cp15.tlb_gen != flush_gen)) {
+        flush_gen = cpu->cp15.tlb_gen;
+        b.jit->ClearCache();
+        std::fill(b.code_page.begin(), b.code_page.end(), 0);
+    }
     b.budget = stop - cpu->cycles;
     b.used = 0;
     b.fallback = b.svc = false;
