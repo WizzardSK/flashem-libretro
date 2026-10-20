@@ -82,6 +82,9 @@ struct Bridge final : Dynarmic::A32::UserCallbacks {
     std::array<std::uint8_t *, Dynarmic::A32::UserConfig::NUM_PAGE_TABLE_ENTRIES> table{};
     std::vector<std::uint32_t> filled;
     std::vector<bool> code_page = std::vector<bool>(1u << 20);
+    // pages that had no plain RAM to give, by TLB generation (+1), so that a
+    // device the CPU polls is not looked up again on every access
+    std::vector<std::uint32_t> no_table = std::vector<std::uint32_t>(1u << 20);
     std::uint32_t table_gen = 0;
     bool use_table = false;
 
@@ -94,11 +97,14 @@ struct Bridge final : Dynarmic::A32::UserCallbacks {
         const std::uint32_t p = va >> 12;
         if (!use_table || table[p] || code_page[p] || !cpu->mem_page_rw) return;
         if (cpu->cp15.tlb_gen != table_gen) clear_table();
+        if (no_table[p] == table_gen + 1) return;
         std::uint8_t *h = cpu->mem_page_rw(ctx(), va);
         if (cpu->cp15.tlb_gen != table_gen) clear_table();   // the lookup flushed
         else if (h) {
             table[p] = h;
             filled.push_back(p);
+        } else {
+            no_table[p] = table_gen + 1;
         }
     }
 
