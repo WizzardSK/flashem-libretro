@@ -105,7 +105,7 @@ endif
 ifeq ($(DEBUG), 1)
 	CFLAGS += -O0 -g
 else
-	CFLAGS += -O2 -DNDEBUG -g
+	CFLAGS += -O2 -DNDEBUG
 endif
 
 # Own suffix, so objects left by the standalone Makefile (built without -fPIC
