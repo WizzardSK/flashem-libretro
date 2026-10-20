@@ -207,12 +207,22 @@ bool run_once(Bridge &b, ARM9 *cpu, std::uint64_t stop, bool step) {
     static const bool timed = getenv("VFLASH_JITSTATS") != nullptr;
     timespec t0, t1;
     if (timed) clock_gettime(CLOCK_MONOTONIC, &t0);
-    if (step) b.jit->Step(); else b.jit->Run();
+    const auto why = step ? b.jit->Step() : b.jit->Run();
     if (timed) {
         clock_gettime(CLOCK_MONOTONIC, &t1);
         b.ns_run += (t1.tv_sec - t0.tv_sec) * 1000000000ull + t1.tv_nsec - t0.tv_nsec;
     }
     b.n_ticks += b.used;
+    if (!b.used && !b.fallback) {
+        // dynarmic stopped without running anything: let the interpreter
+        // take the instruction, so that time moves on
+        static int told;
+        if (told++ < 10)
+            printf("[JIT] no progress at %08X (halt %08X), interpreted\n", b.jit->Regs()[15], (unsigned)why);
+        store_state(b);
+        arm9_step(cpu);
+        return true;
+    }
     store_state(b);
     cpu->cycles += b.used;
     if (!b.fallback) return false;
