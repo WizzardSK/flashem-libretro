@@ -142,7 +142,8 @@ extern "C" int jit_init(ARM9 *cpu) {
     Dynarmic::A32::UserConfig config;
     config.callbacks = b;
     config.arch_version = Dynarmic::A32::ArchVersion::v5TE;
-    // CP15 is the interpreter's: with no coprocessor here, MCR/MRC come back
+    // CP15 is the interpreter's: tools/dynarmic.patch gives every
+    // coprocessor instruction back
     b->jit = std::make_unique<Dynarmic::A32::Jit>(config);
     g_bridge = b;
     return 1;

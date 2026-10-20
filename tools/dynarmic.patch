@@ -1,3 +1,77 @@
+diff --git a/src/dynarmic/frontend/A32/translate/impl/coprocessor.cpp b/src/dynarmic/frontend/A32/translate/impl/coprocessor.cpp
+index 29748a6e..b0fc8b26 100644
+--- a/src/dynarmic/frontend/A32/translate/impl/coprocessor.cpp
++++ b/src/dynarmic/frontend/A32/translate/impl/coprocessor.cpp
+@@ -9,6 +9,9 @@ namespace Dynarmic::A32 {
+ 
+ // CDP{2} <coproc_no>, #<opc1>, <CRd>, <CRn>, <CRm>, #<opc2>
+ bool TranslatorVisitor::arm_CDP(Cond cond, size_t opc1, CoprocReg CRn, CoprocReg CRd, size_t coproc_no, size_t opc2, CoprocReg CRm) {
++    // flashem: the coprocessors (CP15) are the host interpreter's
++    return InterpretThisInstruction();
++
+     if ((coproc_no & 0b1110) == 0b1010) {
+         return arm_UDF();
+     }
+@@ -25,6 +28,9 @@ bool TranslatorVisitor::arm_CDP(Cond cond, size_t opc1, CoprocReg CRn, CoprocReg
+ // LDC{2}{L}<c> <coproc_no>, <CRd>, [<Rn>], #+/-<imm32>
+ // LDC{2}{L}<c> <coproc_no>, <CRd>, [<Rn>], <imm8>
+ bool TranslatorVisitor::arm_LDC(Cond cond, bool p, bool u, bool d, bool w, Reg n, CoprocReg CRd, size_t coproc_no, Imm<8> imm8) {
++    // flashem: the coprocessors (CP15) are the host interpreter's
++    return InterpretThisInstruction();
++
+     if (!p && !u && !d && !w) {
+         return arm_UDF();
+     }
+@@ -54,6 +60,9 @@ bool TranslatorVisitor::arm_LDC(Cond cond, bool p, bool u, bool d, bool w, Reg n
+ 
+ // MCR{2}<c> <coproc_no>, #<opc1>, <Rt>, <CRn>, <CRm>, #<opc2>
+ bool TranslatorVisitor::arm_MCR(Cond cond, size_t opc1, CoprocReg CRn, Reg t, size_t coproc_no, size_t opc2, CoprocReg CRm) {
++    // flashem: the coprocessors (CP15) are the host interpreter's
++    return InterpretThisInstruction();
++
+     if ((coproc_no & 0b1110) == 0b1010) {
+         return arm_UDF();
+     }
+@@ -72,6 +81,9 @@ bool TranslatorVisitor::arm_MCR(Cond cond, size_t opc1, CoprocReg CRn, Reg t, si
+ 
+ // MCRR{2}<c> <coproc_no>, #<opc>, <Rt>, <Rt2>, <CRm>
+ bool TranslatorVisitor::arm_MCRR(Cond cond, Reg t2, Reg t, size_t coproc_no, size_t opc, CoprocReg CRm) {
++    // flashem: the coprocessors (CP15) are the host interpreter's
++    return InterpretThisInstruction();
++
+     if ((coproc_no & 0b1110) == 0b1010) {
+         return arm_UDF();
+     }
+@@ -90,6 +102,9 @@ bool TranslatorVisitor::arm_MCRR(Cond cond, Reg t2, Reg t, size_t coproc_no, siz
+ 
+ // MRC{2}<c> <coproc_no>, #<opc1>, <Rt>, <CRn>, <CRm>, #<opc2>
+ bool TranslatorVisitor::arm_MRC(Cond cond, size_t opc1, CoprocReg CRn, Reg t, size_t coproc_no, size_t opc2, CoprocReg CRm) {
++    // flashem: the coprocessors (CP15) are the host interpreter's
++    return InterpretThisInstruction();
++
+     if ((coproc_no & 0b1110) == 0b1010) {
+         return arm_UDF();
+     }
+@@ -110,6 +125,9 @@ bool TranslatorVisitor::arm_MRC(Cond cond, size_t opc1, CoprocReg CRn, Reg t, si
+ 
+ // MRRC{2}<c> <coproc_no>, #<opc>, <Rt>, <Rt2>, <CRm>
+ bool TranslatorVisitor::arm_MRRC(Cond cond, Reg t2, Reg t, size_t coproc_no, size_t opc, CoprocReg CRm) {
++    // flashem: the coprocessors (CP15) are the host interpreter's
++    return InterpretThisInstruction();
++
+     if ((coproc_no & 0b1110) == 0b1010) {
+         return arm_UDF();
+     }
+@@ -132,6 +150,9 @@ bool TranslatorVisitor::arm_MRRC(Cond cond, Reg t2, Reg t, size_t coproc_no, siz
+ // STC{2}{L}<c> <coproc>, <CRd>, [<Rn>], #+/-<imm32>
+ // STC{2}{L}<c> <coproc>, <CRd>, [<Rn>], <imm8>
+ bool TranslatorVisitor::arm_STC(Cond cond, bool p, bool u, bool d, bool w, Reg n, CoprocReg CRd, size_t coproc_no, Imm<8> imm8) {
++    // flashem: the coprocessors (CP15) are the host interpreter's
++    return InterpretThisInstruction();
++
+     if ((coproc_no & 0b1110) == 0b1010) {
+         return arm_UDF();
+     }
 diff --git a/src/dynarmic/frontend/A32/translate/impl/status_register_access.cpp b/src/dynarmic/frontend/A32/translate/impl/status_register_access.cpp
 index 60110df8..d76023f9 100644
 --- a/src/dynarmic/frontend/A32/translate/impl/status_register_access.cpp
