@@ -222,7 +222,8 @@ jobs:
               -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_LATEST_HOME/build/cmake/android.toolchain.cmake" \
               -DANDROID_ABI=$abi -DANDROID_PLATFORM=android-21 \
               -DBoost_INCLUDE_DIR="$PWD/build/boost-inc" -DBoost_NO_BOOST_CMAKE=ON \
-              -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH
+              -DCMAKE_FIND_ROOT_PATH_MODE_INCLUDE=BOTH \
+              -DCMAKE_CXX_FLAGS="-include cstdlib"   # the bundled fmt leans on a transitive <cstdlib> the NDK's libc++ dropped
           done
 
       - name: Build the libretro core
