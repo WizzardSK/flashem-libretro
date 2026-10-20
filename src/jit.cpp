@@ -166,6 +166,9 @@ extern "C" int jit_init(ARM9 *cpu) {
     config.arch_version = Dynarmic::A32::ArchVersion::v5TE;
     // CP15 is the interpreter's: tools/dynarmic.patch gives every
     // coprocessor instruction back
+    // VFLASH_JITOPT=<hex> (debugging): dynarmic's optimisation flags
+    if (getenv("VFLASH_JITOPT"))
+        config.optimizations = static_cast<Dynarmic::OptimizationFlag>(strtoul(getenv("VFLASH_JITOPT"), nullptr, 16));
     b->jit = std::make_unique<Dynarmic::A32::Jit>(config);
     g_bridge = b;
     return 1;
@@ -184,6 +187,9 @@ namespace {
 // instructions it gave back; true if it gave any back
 bool run_once(Bridge &b, ARM9 *cpu, std::uint64_t stop, bool step) {
     b.budget = stop > cpu->cycles ? stop - cpu->cycles : 1;
+    // VFLASH_JITBUDGET=<n> (debugging): runs of at most n cycles
+    static const std::uint64_t cap = getenv("VFLASH_JITBUDGET") ? strtoull(getenv("VFLASH_JITBUDGET"), nullptr, 0) : 0;
+    if (cap && b.budget > cap) b.budget = cap;
     b.used = 0;
     b.fallback = b.svc = false;
     load_state(b);
