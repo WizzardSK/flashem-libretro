@@ -152,12 +152,12 @@ jobs:
 
       - name: Build the standalone emulator
         if: runner.os != 'Windows'
-        run: make flashem -j$(getconf _NPROCESSORS_ONLN)
+        run: make flashem JIT=1 -j$(getconf _NPROCESSORS_ONLN)
 
       - name: Build the standalone emulator (Windows)
         if: runner.os == 'Windows'
         shell: msys2 {0}
-        run: make platform=win SDL2_PREFIX= flashem.exe -j$(nproc)
+        run: make platform=win SDL2_PREFIX= JIT=1 flashem.exe -j$(nproc)
 
       - name: Stage the standalone emulator
         if: runner.os != 'Windows'

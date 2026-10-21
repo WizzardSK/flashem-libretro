@@ -94,10 +94,11 @@ void retro_set_environment(retro_environment_t cb)
 
    environ_cb = cb;
 
-   /* The console's language, which it keeps in its system flash (hw.c), and
-    * the ARM9 on dynarmic or on the interpreter it started with; one call,
-    * as SET_VARIABLES replaces what was set before */
+   /* The boot ROM, the console's language, which it keeps in its system
+    * flash (hw.c), and the ARM9 on dynarmic or on the interpreter it started
+    * with; one call, as SET_VARIABLES replaces what was set before */
    static const struct retro_variable vars[] = {
+      { "flashem_bios", "Boot ROM (Restart); Automatic|70004.bin (German)|vflash_us.bin (US)" },
       { "flashem_language", "Console Language (Restart); Boot ROM's own|English (US)|English (UK)|French|Spanish|German|Dutch" },
 #ifdef FLASHEM_JIT
       { "flashem_cpu", "CPU Emulation (Restart); JIT|Interpreter" },
@@ -353,8 +354,22 @@ bool retro_load_game(const struct retro_game_info *game)
       if (environ_cb(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &sysdir) && sysdir)
       {
          vflash_set_bios_dir(sysdir);
-         log_cb(RETRO_LOG_INFO, "FlashEm: looking for 70004.bin in '%s'\n", sysdir);
+         log_cb(RETRO_LOG_INFO, "FlashEm: looking for the boot ROM in '%s'\n", sysdir);
       }
+   }
+   /* Automatic: the first of them found */
+   {
+      struct retro_variable var = { "flashem_bios", NULL };
+      char name[64] = "";
+      if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value
+          && strcmp(var.value, "Automatic"))
+      {
+         char *space;
+         snprintf(name, sizeof(name), "%s", var.value);
+         if ((space = strchr(name, ' ')))
+            *space = '\0';
+      }
+      vflash_set_bios_name(name);
    }
 
 #ifdef FLASHEM_JIT
@@ -367,8 +382,8 @@ bool retro_load_game(const struct retro_game_info *game)
    s_vf = vflash_create(disc);
    if (!s_vf)
    {
-      log_cb(RETRO_LOG_ERROR, "FlashEm: could not start '%s' - is 70004.bin in the "
-             "system directory?\n", disc ? disc : "(no disc)");
+      log_cb(RETRO_LOG_ERROR, "FlashEm: could not start '%s' - is the boot ROM "
+             "(70004.bin or vflash_us.bin) in the system directory?\n", disc ? disc : "(no disc)");
       return false;
    }
 

@@ -53,10 +53,16 @@
 
 typedef struct VFlash VFlash;
 
-/* Directory to look in for the boot ROM (70004.bin), as <dir>/flashem/70004.bin
- * or <dir>/70004.bin. Set it before vflash_create(); a frontend passes its own
- * system directory here. $FLASHEM_BIOS and ./70004.bin are tried after it. */
+/* Directory to look in for the boot ROM, as <dir>/flashem/<name> or
+ * <dir>/<name>. Set it before vflash_create(); a frontend passes its own
+ * system directory here. $FLASHEM_BIOS and ./<name> are tried after it. */
 void      vflash_set_bios_dir(const char *dir);
+/* The boot ROMs' file names, in the order they are tried: 70004.bin (German)
+ * and vflash_us.bin (US); NULL-terminated. */
+extern const char *const vflash_bios_names[];
+/* Only this boot ROM: one of those names, or a path; NULL or "" tries them
+ * all in turn. Set it before vflash_create(). */
+void      vflash_set_bios_name(const char *name);
 /* NULL if the boot ROM cannot be found or the disc image cannot be opened. */
 VFlash   *vflash_create(const char *disc_path);
 /* Loads a program into RAM and starts the CPU at its entry point instead of the

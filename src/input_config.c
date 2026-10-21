@@ -126,15 +126,27 @@ static void write_defaults(const char *path) {
     fprintf(f, "\n[gamepad]\n");
     for (size_t i = 0; i < NACTIONS; i++)
         fprintf(f, "%s = %s\n", actions[i].name, actions[i].pad);
-    fprintf(f, "\n; The console's language: bios (the boot ROM's own), en-us, en-uk, fr, es,\n"
-               "; de or nl. It takes effect at the next start.\n[console]\nlanguage = bios\n");
+    fprintf(f, "\n; The console. They take effect at the next start.\n"
+               "; language: bios (the boot ROM's own), en-us, en-uk, fr, es, de or nl.\n"
+               "; boot_rom: auto (70004.bin, else vflash_us.bin), 70004.bin (German),\n"
+               ";   vflash_us.bin (US), or a path.\n"
+               "; cpu: jit or interpreter (the JIT is in the 64-bit builds).\n"
+               "[console]\nlanguage = bios\nboot_rom = auto\ncpu = jit\n");
     fclose(f);
 }
 
-static char language[16];
+static char language[16], boot_rom[1024], cpu[16];
 
 const char *input_config_language(void) {
     return language[0] ? language : NULL;
+}
+
+const char *input_config_boot_rom(void) {
+    return boot_rom[0] ? boot_rom : NULL;
+}
+
+const char *input_config_cpu(void) {
+    return cpu[0] ? cpu : NULL;
 }
 
 void input_config_load(const char *dir) {
@@ -169,6 +181,10 @@ void input_config_load(const char *dir) {
         if (console) {
             if (!strcmp(name, "language"))
                 snprintf(language, sizeof(language), "%s", value);
+            else if (!strcmp(name, "boot_rom"))
+                snprintf(boot_rom, sizeof(boot_rom), "%s", value);
+            else if (!strcmp(name, "cpu"))
+                snprintf(cpu, sizeof(cpu), "%s", value);
             else
                 fprintf(stderr, "[Input] flashem.ini: unknown console setting \"%s\"\n", name);
             continue;

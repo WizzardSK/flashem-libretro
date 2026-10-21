@@ -3,6 +3,8 @@
 #   make                  Linux / WSL: flashem, with the system SDL2 (sdl2-config)
 #   make platform=win     Windows: flashem.exe + SDL2.dll, cross-compiled with MinGW-w64
 #                         from Linux/WSL, or built natively in an MSYS2 MinGW64 shell
+#   JIT=1                 the ARM9 on dynarmic too, as in the libretro core (64-bit
+#                         hosts): tools/build_dynarmic.sh first
 #
 # Windows needs the SDL2 MinGW development package (SDL2-devel-2.x-mingw.tar.gz from
 # https://github.com/libsdl-org/SDL/releases). Point SDL2_PREFIX at its
@@ -25,6 +27,7 @@ ifeq ($(platform),win)
 		CROSS ?= x86_64-w64-mingw32-
 	endif
 	CC      = $(CROSS)gcc
+	CXX     = $(CROSS)g++
 	SDL2_PREFIX ?= $(HOME)/vfg/deps/SDL2-2.32.10/x86_64-w64-mingw32
 	ifneq ($(wildcard $(SDL2_PREFIX)/include/SDL2/SDL.h),)
 		SDL_CFLAGS = -I$(SDL2_PREFIX)/include -I$(SDL2_PREFIX)/include/SDL2 -Dmain=SDL_main
@@ -52,6 +55,26 @@ endif
 CFLAGS += -O2 -Wall -Wextra -Iinclude $(SDL_CFLAGS)
 OBJS    = $(SRCS:.c=$(O))
 BIN     = flashem$(EXE)
+LINK    = $(CC)
+
+# JIT=1: the ARM9 on dynarmic, built first with tools/build_dynarmic.sh into
+# DYNARMIC_BUILD; the program is then linked as C++
+ifeq ($(JIT),1)
+	DYNARMIC_BUILD ?= build/dynarmic
+	DYNARMIC_LIBS  := $(shell cat $(DYNARMIC_BUILD)/libs.txt 2>/dev/null)
+	CXXFLAGS += -std=c++20 -O2 -Isrc -Iexternal/dynarmic/src -Iexternal/dynarmic/externals/mcl/include
+	CFLAGS   += -DFLASHEM_JIT
+	OBJS     += src/jit$(O)
+	ifeq ($(shell uname -s),Darwin)
+		LDFLAGS += $(DYNARMIC_LIBS)
+	else
+		LDFLAGS += -Wl,--start-group $(DYNARMIC_LIBS) -Wl,--end-group -static-libstdc++
+		ifneq ($(platform),win)
+			LDFLAGS += -ldl
+		endif
+	endif
+	LINK     = $(CXX)
+endif
 
 TOOLS = gereplay$(EXE) disc_analyze$(EXE) mjp_extract$(EXE) ptx_extract$(EXE) disc_compare$(EXE) testrom_gen$(EXE)
 
@@ -68,7 +91,7 @@ DEPS    = $(OBJS:.o=.d)
 -include $(DEPS)
 
 $(BIN): $(OBJS)
-	$(CC) $(OBJS) -o $(BIN) $(LDFLAGS)
+	$(LINK) $(OBJS) -o $(BIN) $(LDFLAGS)
 ifneq ($(SDL_DLL),)
 	cp $(SDL_DLL) .
 endif
@@ -97,6 +120,9 @@ disc_compare$(EXE): src/disc_compare.c
 
 %$(O): %.c
 	$(CC) $(CFLAGS) -c $< -o $@
+
+%$(O): %.cpp
+	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 clean:
 	rm -f $(OBJS) $(DEPS) $(BIN) $(TOOLS) testrom.bin

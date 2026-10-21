@@ -9,10 +9,11 @@ The emulator runs the console's original boot ROM and each disc's own ARM code.
 The ROM boots µMORE, mounts the disc through the emulated CD hardware, and loads
 the game's `0SYSTEM/BOOT.BIN`. Graphics, audio, and movies come from the emulated
 devices; the original movie-decoder firmware runs on a ZSP400 interpreter.
-In the libretro cores for 64-bit hosts (Linux, Windows x64, macOS arm64,
-Android arm64-v8a/x86_64) the ARM9 runs on the dynarmic JIT recompiler, with
-the interpreter for what it gives back (mode changes, CP15, exceptions); the
-core option CPU Emulation switches back to the interpreter.
+On 64-bit hosts (the libretro cores for Linux, Windows x64, macOS arm64 and
+Android arm64-v8a/x86_64, and the standalone emulator) the ARM9 runs on the
+dynarmic JIT recompiler, with the interpreter for what it gives back (mode
+changes, CP15, exceptions); the core option CPU Emulation, or `--cpu` and
+`flashem.ini`'s `cpu` in the standalone, switches back to the interpreter.
 There is no high-level replacement for the operating system or games.
 
 ## Current status
@@ -54,7 +55,7 @@ playability across every title, revision, or game mode.
 - There are no save states or serialization-based features such as rewind,
   run-ahead, or netplay. The libretro core also has no reset implementation,
   disk swapping, cheats, or persistent save-memory interface; its core
-  options are Console Language and CPU Emulation (JIT or Interpreter).
+  options are Boot ROM, Console Language and CPU Emulation (JIT or Interpreter).
   Reload the content to restart it.
 - The libretro core currently advertises 60 Hz/NTSC timing even though framebuffer
   dimensions follow the video-engine registers, including PAL-sized rasters.
@@ -75,17 +76,23 @@ Debian and Ubuntu).
 
 ## Required files
 
-Supply your own **`70004.bin` boot ROM (2 MiB)** and disc image. ROMs, games, and
+Supply your own **boot ROM (2 MiB)** and disc image. Two are known:
+`70004.bin`, the German console's (md5 `f19e090723accb3353a7c4bef342af71`, menu
+in German), and `vflash_us.bin`, the US console's (md5
+`60b1ef08a7f3a795d66f2cf41140901b`, menu in English; a dump of the console's
+A29L160ATV NOR flash - rename it). ROMs, games, and
 extracted DSP firmware are not supplied. Normal gameplay loads the DSP firmware
 from the game through the emulated hardware; no separate DSP file is needed.
 
-The boot ROM is searched for in this order:
+The boot ROM is searched for in this order, `70004.bin` first and then
+`vflash_us.bin` at each step, or only the one chosen with the core option Boot
+ROM (`--boot-rom` or `flashem.ini`'s `boot_rom` in the standalone):
 
-1. `<system>/flashem/70004.bin`, then `<system>/70004.bin`, when a libretro
+1. `<system>/flashem/<name>`, then `<system>/<name>`, when a libretro
    frontend supplies its system directory; for the standalone emulator, the
    directory the program is in.
 2. The path in the `FLASHEM_BIOS` environment variable.
-3. `70004.bin` in the current working directory.
+3. `<name>` in the current working directory.
 
 Use a **raw BIN image with its CUE sheet** and open the `.cue`. Keep the referenced
 BIN beside the CUE. The loader reads tracks from a single-file CUE; multi-file
@@ -160,7 +167,7 @@ listed; use a clean rebuild after changing shared structures in headers.
 
 ## Standalone emulator
 
-Put `70004.bin` beside `flashem` (`flashem.exe`) and start it. With no disc on
+Put the boot ROM (`70004.bin` or `vflash_us.bin`) beside `flashem` (`flashem.exe`) and start it. With no disc on
 the command line it asks for one with the system's file picker (on Linux zenity
 or kdialog; without either, give the disc on the command line); cancelled, the
 console starts into its menu with the drive empty. A disc image dropped on the
@@ -224,12 +231,14 @@ The standalone emulator also takes gamepads (SDL GameController), laid out as th
 RetroPad column above, with the left stick as the V.Flash stick too and R3 as
 turbo. Keys and gamepad buttons, hotkeys included, are rebound in `flashem.ini`
 beside the program, which it writes with the defaults on its first start; delete
-it to get them back.
+it to get them back. Its `[console]` section sets the console's `language`, the
+`boot_rom` and the `cpu` (`jit` or `interpreter`), as `--language`, `--boot-rom`
+and `--cpu` do for one run. The debugger always runs the interpreter.
 
 ## libretro core
 
-Load the built core in a libretro frontend, put `70004.bin` in its system
-directory, and load the game's `.cue`. The accompanying
+Load the built core in a libretro frontend, put the boot ROM (`70004.bin` or
+`vflash_us.bin`) in its system directory, and load the game's `.cue`. The accompanying
 `flashem_libretro.info` provides frontend metadata.
 
 The core opens content by filesystem path (`need_fullpath`) and requires a disc
@@ -289,7 +298,7 @@ condition is supplied.
 | `VFLASH_SHOT_FRAME=N[,N...]` | Headless screenshot frames in ascending order; default 50 |
 | `VFLASH_SHOT=<path>` | Headless PPM path; `%d` inserts the frame number; default `/tmp/vflash_screen.ppm` |
 | `VFLASH_FASTBOOT=0` | Disable accelerated boot |
-| `VFLASH_JIT=0` | Libretro core: run the ARM9 on the interpreter (as the core option) |
+| `VFLASH_JIT=0` | Run the ARM9 on the interpreter (as the core option or `--cpu interpreter`) |
 | `VFLASH_RTC=<unix-seconds>` | Fix the RTC's starting time for reproducible runs |
 | `VFLASH_INPUT=<hex>@<from>-<to>[;...]` | Script frontend button masks; e.g. `100@3100-3110` presses Enter |
 | `VFLASH_KEYS=<hex>@<from>-<to>` | Force raw key-register bits, distinct from controller reports |

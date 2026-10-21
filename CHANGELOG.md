@@ -4,6 +4,8 @@ What changed in FlashEm, newest first. Releases are builds of the libretro core 
 
 ## Unreleased
 
+- The US console's boot ROM works too, with its menu in English: `vflash_us.bin` (md5 60b1ef08a7f3a795d66f2cf41140901b, the console's NOR flash dump that SatellaGuyAlt found), beside or instead of the German `70004.bin`. With both present, the core option Boot ROM (`--boot-rom`, `[console] boot_rom` in `flashem.ini`) picks one; Automatic takes `70004.bin` first (#5).
+- The standalone emulator runs the ARM9 on the dynarmic JIT too, as the 64-bit libretro cores do; `--cpu interpreter` or `[console] cpu = interpreter` in `flashem.ini` goes back to the interpreter, and the debugger always uses it (#5).
 - The console's language can be chosen: English (US), English (UK), French, Spanish, German or Dutch, kept in the console's system flash as on the real hardware. Core option Console Language, `[console] language` in `flashem.ini`, or `--language` (SatellaGuyAlt, #5).
 
 ## v0.5 - 2026-10-20

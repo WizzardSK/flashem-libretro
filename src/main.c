@@ -3,6 +3,10 @@
 #include "audio.h"
 #include "frame_pacer.h"
 #include "input_config.h"
+#include "cdrom.h"
+#ifdef FLASHEM_JIT
+#include "jit.h"
+#endif
 #include <SDL2/SDL.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -31,6 +35,13 @@ static void print_usage(const char *prog) {
         "  --scale N    Window scale factor (default: 2)\n"
         "  --language L The console's language: bios, en-us, en-uk, fr, es, de, nl\n"
         "               (default: flashem.ini's [console] language, else bios)\n"
+        "  --boot-rom F The boot ROM: 70004.bin (German), vflash_us.bin (US) or a\n"
+        "               path (default: flashem.ini's [console] boot_rom, else the\n"
+        "               first of the two found)\n"
+#ifdef FLASHEM_JIT
+        "  --cpu C      The ARM9 on the jit or the interpreter (default:\n"
+        "               flashem.ini's [console] cpu, else jit)\n"
+#endif
         "  --load F[@A] Load a program and start it instead of the boot ROM: an ELF,\n"
         "               a BOOT.BIN, or a raw binary at address A (hex)\n"
         "  --entry A    Start the loaded program at address A (hex) instead\n"
@@ -138,13 +149,22 @@ static const char *s_language;
 static int switch_disc(VFlash **vf, Audio **audio, const char *disc_path, const char *memcard) {
     if (memcard && !vflash_memcard_save(*vf, memcard))
         fprintf(stderr, "[Main] could not write memory card %s\n", memcard);
-    VFlash *next = vflash_create(disc_path);
-    if (!next) {
+    /* The disc is tried first: the running console is ended before the next
+     * one is made, as the JIT serves one CPU at a time */
+    CDROM *probe = cdrom_create();
+    int opens = probe && cdrom_open(probe, disc_path);
+    cdrom_destroy(probe);
+    if (!opens) {
         fprintf(stderr, "[Main] could not open %s\n", disc_path);
         return 0;
     }
     vflash_destroy(*vf);
-    *vf = next;
+    *vf = vflash_create(disc_path);
+    if (!*vf) {
+        fprintf(stderr, "[Main] could not start %s\n", disc_path);
+        exit(1);
+    }
+    VFlash *next = *vf;
     vflash_set_language(next, s_language);
     if (memcard && !vflash_memcard_load(next, memcard))
         fprintf(stderr, "[Main] could not read memory card %s\n", memcard);
@@ -162,6 +182,7 @@ int main(int argc, char **argv) {
     int dbg_mode = 0;  /* 0=off, 1=paused at boot, 2=running with debugger */
     const char *program = NULL;
     const char *memcard = NULL;
+    const char *boot_rom = NULL, *cpu = NULL;
     int quiet = 0;
     uint32_t load_addr = VFLASH_ADDR_NONE, entry = VFLASH_ADDR_NONE;
 
@@ -170,6 +191,8 @@ int main(int argc, char **argv) {
         if (strcmp(argv[i], "--debug") == 0)        debug    = 1;
         else if (strcmp(argv[i], "--headless") == 0) headless = 1;
         else if (strcmp(argv[i], "--language") == 0 && i+1 < argc) s_language = argv[++i];
+        else if (strcmp(argv[i], "--boot-rom") == 0 && i+1 < argc) boot_rom = argv[++i];
+        else if (strcmp(argv[i], "--cpu") == 0 && i+1 < argc) cpu = argv[++i];
         else if (strcmp(argv[i], "--dbg") == 0)      dbg_mode = 1;
         else if (strcmp(argv[i], "--dbg-run") == 0)  dbg_mode = 2;
         else if (strcmp(argv[i], "--help") == 0)    { print_usage(argv[0]); return 0; }
@@ -210,6 +233,16 @@ int main(int argc, char **argv) {
     char *base_dir = SDL_GetBasePath();
     if (base_dir)
         vflash_set_bios_dir(base_dir);
+    /* flashem.ini's controls and console settings, the command line's first */
+    if (!headless)
+        input_config_load(base_dir);
+    if (!boot_rom) boot_rom = input_config_boot_rom();
+    vflash_set_bios_name(boot_rom && strcmp(boot_rom, "auto") ? boot_rom : NULL);
+    if (!cpu) cpu = input_config_cpu();
+#ifdef FLASHEM_JIT
+    /* The debugger steps the interpreter */
+    jit_enabled = !dbg_mode && !(cpu && !strcmp(cpu, "interpreter"));
+#endif
 
     /* No disc given: ask for one, unless the run is headless, under the
      * debugger or starts a program of its own */
@@ -222,9 +255,10 @@ int main(int argc, char **argv) {
     if (!vf) {
         if (!headless)
             SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "FlashEm",
-                disc_path ? "The boot ROM 70004.bin was not found beside FlashEm, or the disc "
-                            "image could not be opened."
-                          : "The boot ROM 70004.bin was not found. Put it beside FlashEm.",
+                disc_path ? "The boot ROM (70004.bin or vflash_us.bin) was not found beside "
+                            "FlashEm, or the disc image could not be opened."
+                          : "The boot ROM (70004.bin or vflash_us.bin) was not found. Put it "
+                            "beside FlashEm.",
                 NULL);
         return 1;
     }
@@ -252,8 +286,6 @@ int main(int argc, char **argv) {
     /* Gamepads are optional: without the subsystem the keyboard still works */
     if (!headless && SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER) < 0)
         fprintf(stderr, "[SDL] No gamepad support: %s\n", SDL_GetError());
-    if (!headless)
-        input_config_load(base_dir);
     if (!s_language) s_language = input_config_language();
     if (!vflash_set_language(vf, s_language))
         fprintf(stderr, "[Main] unknown language \"%s\"\n", s_language);
