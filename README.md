@@ -340,13 +340,16 @@ tool:
 ./disc_compare first.iso second.iso
 ./mjp_extract game.iso frames/
 ./ptx_extract game.iso images/
+python tools/output_bin_extract.py OUTPUT.BIN out/
 ./gereplay capture.bin output.ppm
 ```
 
 The disc/asset utilities above operate on ISO payload images; they do not share
 the emulator's full CUE/BIN loader. MJP extraction is a research utility, separate
-from native DSP playback. `testrom_gen` is also built; `make testrom.bin` generates
-its synthetic test ROM.
+from native DSP playback. `tools/output_bin_extract.py` unpacks a game's `OUTPUT.BIN`
+(a table of sector, size and path, then the files: pictures, voices, music, movies),
+and with ffmpeg on the PATH turns its music, AIFF-C in Apple's IMA4 codec, into WAV.
+`testrom_gen` is also built; `make testrom.bin` generates its synthetic test ROM.
 
 Focused C tests live in [tools/](tools/), covering DSP instructions and DMA,
 firmware integration, video composition, graphics depth, CD streaming guards,

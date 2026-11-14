@@ -4,6 +4,7 @@ What changed in FlashEm, newest first. Releases are builds of the libretro core 
 
 ## Unreleased
 
+- `tools/output_bin_extract.py` unpacks a game disc's `OUTPUT.BIN`, the archive some games keep their pictures, voices, music and movies in, and with ffmpeg turns the music (AIFF-C, IMA4) into WAV. Written for the music of Bratz Fashion Pixiez: The Secret Necklace (818 files, 10 tracks).
 - The console's language can be chosen: English (US), English (UK), French, Spanish, German or Dutch, kept in the console's system flash as on the real hardware. Core option Console Language, `[console] language` in `flashem.ini`, or `--language` (SatellaGuyAlt, #5).
 
 ## v0.5 - 2026-10-20
