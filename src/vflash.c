@@ -22,6 +22,7 @@ struct VFlash {
 };
 
 static char s_bios_dir[1024];
+static char s_bios_name[256];
 static void push_hardware_audio(void *ctx,const int16_t *samples,uint32_t count) {
     audio_push_samples((Audio *)ctx,samples,count);
 }
@@ -31,43 +32,58 @@ void vflash_set_bios_dir(const char *dir) {
     snprintf(s_bios_dir, sizeof(s_bios_dir), "%s", dir);
 }
 
-/* The directory a frontend handed us (RetroArch's system directory), then
- * $FLASHEM_BIOS, then beside the binary for a standalone run. */
-static int load_rom(VFlash *vf) {
-    char sys_sub[1100], sys_rom[1100];
-    const char *paths[5];
-    int n = 0;
+/* The boot ROMs known, in the order they are tried: the German console's
+ * (5/14/07) and the US console's (14/9/06, the A29L160ATV NOR dump), whose
+ * menus are in German and in English. */
+const char *const vflash_bios_names[] = { "70004.bin", "vflash_us.bin", NULL };
 
-    if (s_bios_dir[0]) {
-        snprintf(sys_sub, sizeof(sys_sub), "%s/flashem/70004.bin", s_bios_dir);
-        snprintf(sys_rom, sizeof(sys_rom), "%s/70004.bin", s_bios_dir);
-        paths[n++] = sys_sub;
-        paths[n++] = sys_rom;
-    }
-    if (getenv("FLASHEM_BIOS"))
-        paths[n++] = getenv("FLASHEM_BIOS");
-    paths[n++] = "70004.bin";
-    paths[n] = NULL;
+void vflash_set_bios_name(const char *name) {
+    snprintf(s_bios_name, sizeof(s_bios_name), "%s", name ? name : "");
+}
 
-    for (int i = 0; paths[i]; i++) {
-        FILE *f = fopen(paths[i], "rb");
-        if (!f) continue;
-        fseek(f, 0, SEEK_END);
-        long sz = ftell(f);
-        fseek(f, 0, SEEK_SET);
-        if (sz > 0 && (unsigned long)sz <= ROM_MAX) {
-            vf->rom = malloc((size_t)sz);
-            if (vf->rom && fread(vf->rom, 1, (size_t)sz, f) == (size_t)sz) {
-                vf->rom_size = (uint32_t)sz;
-                fclose(f);
-                printf("[VFlash] Boot ROM: %s (%ld bytes)\n", paths[i], sz);
-                return 1;
-            }
-            free(vf->rom);
-            vf->rom = NULL;
+static int read_rom(VFlash *vf, const char *path) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return 0;
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (sz > 0 && (unsigned long)sz <= ROM_MAX) {
+        vf->rom = malloc((size_t)sz);
+        if (vf->rom && fread(vf->rom, 1, (size_t)sz, f) == (size_t)sz) {
+            vf->rom_size = (uint32_t)sz;
+            fclose(f);
+            printf("[VFlash] Boot ROM: %s (%ld bytes)\n", path, sz);
+            return 1;
         }
-        fclose(f);
+        free(vf->rom);
+        vf->rom = NULL;
     }
+    fclose(f);
+    return 0;
+}
+
+/* Each boot ROM name (or only the one chosen) in the directory a frontend
+ * handed us (RetroArch's system directory, or beside the binary for a
+ * standalone run), in flashem/ and then in it; then $FLASHEM_BIOS; then the
+ * names in the working directory. A chosen name with a directory in it is
+ * used as it is. */
+static int load_rom(VFlash *vf) {
+    const char *only[2] = { s_bios_name, NULL };
+    const char *const *names = s_bios_name[0] ? only : vflash_bios_names;
+    char path[1400];
+
+    if (strchr(names[0], '/') || strchr(names[0], '\\'))
+        return read_rom(vf, names[0]);
+    for (int i = 0; s_bios_dir[0] && names[i]; i++) {
+        snprintf(path, sizeof(path), "%s/flashem/%s", s_bios_dir, names[i]);
+        if (read_rom(vf, path)) return 1;
+        snprintf(path, sizeof(path), "%s/%s", s_bios_dir, names[i]);
+        if (read_rom(vf, path)) return 1;
+    }
+    if (getenv("FLASHEM_BIOS") && read_rom(vf, getenv("FLASHEM_BIOS")))
+        return 1;
+    for (int i = 0; names[i]; i++)
+        if (read_rom(vf, names[i])) return 1;
     return 0;
 }
 
@@ -78,8 +94,9 @@ VFlash *vflash_create(const char *disc_path) {
     vf->audio = audio_create();
 
     if (!load_rom(vf)) {
-        fprintf(stderr, "[VFlash] Boot ROM 70004.bin not found (system directory, "
-                        "$FLASHEM_BIOS or the working directory)\n");
+        fprintf(stderr, "[VFlash] Boot ROM %s not found (system directory, "
+                        "$FLASHEM_BIOS or the working directory)\n",
+                s_bios_name[0] ? s_bios_name : "70004.bin or vflash_us.bin");
         vflash_destroy(vf);
         return NULL;
     }

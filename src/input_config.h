@@ -22,6 +22,11 @@ void input_config_load(const char *dir);
  * vflash_set_language), or NULL when it names none. */
 const char *input_config_language(void);
 
+/* flashem.ini's [console] boot_rom (auto, a boot ROM's name or a path) and
+ * cpu (jit or interpreter), or NULL when it names none. */
+const char *input_config_boot_rom(void);
+const char *input_config_cpu(void);
+
 /* Gamepads coming and going (SDL_CONTROLLERDEVICEADDED / REMOVED). */
 void input_handle_event(const SDL_Event *ev);
 
