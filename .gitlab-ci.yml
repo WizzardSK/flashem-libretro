@@ -10,6 +10,15 @@
     JNI_PATH: .
     CORENAME: flashem
     MAKEFILE: Makefile.libretro
+    # external/dynarmic (the ARM9's JIT) and external/boost (its Boost headers)
+    GIT_SUBMODULE_STRATEGY: recursive
+
+# The JIT on the 64-bit desktops dynarmic has a backend for (x86_64, arm64):
+# Makefile.libretro builds dynarmic itself with CMake when JIT=1. The 32-bit
+# targets, Android and iOS (no JIT allowed there) keep the interpreter.
+.jit:
+  variables:
+    JIT: "1"
 
 # Inclusion templates, required for the build to work
 include:
@@ -67,6 +76,7 @@ libretro-build-windows-x64:
   extends:
     - .libretro-windows-x64-mingw-make-default
     - .core-defs
+    - .jit
 
 # Windows 32-bit
 libretro-build-windows-i686:
@@ -79,6 +89,12 @@ libretro-build-linux-x64:
   extends:
     - .libretro-linux-x64-make-default
     - .core-defs
+    - .jit
+  # dynarmic is C++20: the image with the newer compilers, not the default gcc 9
+  image: $CI_SERVER_HOST:5050/libretro-infrastructure/libretro-build-amd64-ubuntu:backports
+  variables:
+    CC: gcc-12
+    CXX: g++-12
 
 # Linux 32-bit
 libretro-build-linux-i686:
@@ -91,18 +107,21 @@ libretro-build-linux-aarch64:
   extends:
     - .libretro-linux-aarch64-make-default
     - .core-defs
+    - .jit
 
 # MacOS 64-bit
 libretro-build-osx-x64:
   extends:
     - .libretro-osx-x64-make-default
     - .core-defs
+    - .jit
 
 # MacOS ARM 64-bit
 libretro-build-osx-arm64:
   extends:
     - .libretro-osx-arm64-make-default
     - .core-defs
+    - .jit
 
 ################################### CELLULAR #################################
 # Android ARMv7a

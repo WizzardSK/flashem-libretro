@@ -2,6 +2,10 @@
 
 What changed in FlashEm, newest first. Releases are builds of the libretro core and, from v0.3, of the standalone emulator too.
 
+## Unreleased
+
+- The libretro buildbot's 64-bit Windows, Linux and macOS builds run the ARM9 on the dynarmic JIT too, as the GitHub releases do: `make -f Makefile.libretro JIT=1` now builds dynarmic itself with CMake (cross-compiling it for Windows with MinGW), and its Boost headers come from a submodule (`external/boost`), so nothing has to be installed. 32-bit, Android and iOS builds keep the interpreter.
+
 ## v0.6 - 2026-11-14
 
 - The US console's boot ROM works too, with its menu in English: `vflash_us.bin` (md5 60b1ef08a7f3a795d66f2cf41140901b, the console's NOR flash dump that SatellaGuyAlt found), beside or instead of the German `70004.bin`. With both present, the core option Boot ROM (`--boot-rom`, `[console] boot_rom` in `flashem.ini`) picks one; Automatic takes `70004.bin` first (#5).
