@@ -2,7 +2,7 @@
 
 What changed in FlashEm, newest first. Releases are builds of the libretro core and, from v0.3, of the standalone emulator too.
 
-## Unreleased
+## November 2026
 
 - The libretro buildbot's 64-bit Windows, Linux and macOS builds run the ARM9 on the dynarmic JIT too, as the GitHub releases do: `make -f Makefile.libretro JIT=1` now builds dynarmic itself with CMake (cross-compiling it for Windows with MinGW), and its Boost headers come from a submodule (`external/boost`), so nothing has to be installed. 32-bit, Android and iOS builds keep the interpreter.
 
