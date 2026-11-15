@@ -22,7 +22,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
-      - run: docker run --rm -v "$PWD":/src -w /src ${{ matrix.img }} sh -c 'apt-get -o Acquire::Retries=5 update -qq && DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -yqq ${{ matrix.pkgs }} >/dev/null && git config --global --add safe.directory "*" && env platform=unix ${{ matrix.env }} make -f Makefile.libretro -j4 && ls -la flashem_libretro.so && (nm -D flashem_libretro.so | grep -c " T retro_")'
+      - run: docker run --rm -v "$PWD":/src -w /src ${{ matrix.img }} sh -c 'apt-get -o Acquire::Retries=5 update -qq && DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -yqq ${{ matrix.pkgs }} >/dev/null && (git config --global --add safe.directory "*" 2>/dev/null || true) && env platform=unix ${{ matrix.env }} make -f Makefile.libretro -j4 && ls -la flashem_libretro.so && (nm -D flashem_libretro.so | grep -c " T retro_")'
 
   windows:
     strategy:
@@ -31,7 +31,7 @@ jobs:
         include:
           # libretro-build-mxe-win-cross-cores:gcc16: MXE with mingw-w64 14 (xbyak
           # needs its newer Windows headers), so Arch's mingw-w64 for the JIT job
-          - { arch: x86_64, env: "JIT=1", img: "archlinux:latest", setup: "pacman -Sy --noconfirm --needed mingw-w64-gcc cmake make git >/dev/null", cc: "x86_64-w64-mingw32-gcc", cxx: "x86_64-w64-mingw32-g++" }
+          - { arch: x86_64, env: "JIT=1", img: "archlinux:latest", setup: "pacman -Syu --noconfirm --needed mingw-w64-gcc cmake make git >/dev/null", cc: "x86_64-w64-mingw32-gcc", cxx: "x86_64-w64-mingw32-g++" }
           - { arch: i686, env: "", img: "ubuntu:noble", setup: "apt-get -o Acquire::Retries=5 update -qq && DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -yqq make gcc-mingw-w64-i686 >/dev/null", cc: "i686-w64-mingw32-gcc", cxx: "i686-w64-mingw32-g++" }
     runs-on: ubuntu-24.04
     steps:
