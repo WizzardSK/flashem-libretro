@@ -113,11 +113,32 @@ endif
 OBJECTS := $(SOURCES_C:.c=.lr.o)
 CFLAGS  += -Wall -Wextra -std=gnu11 $(fpic) -I$(CORE_DIR)/src -DFLASHEM_NO_SDL
 
-# JIT=1: the ARM9 on dynarmic, built first with tools/build_dynarmic.sh into
-# DYNARMIC_BUILD; the core is then linked as C++
+# JIT=1: the ARM9 on dynarmic, built with tools/build_dynarmic.sh into
+# DYNARMIC_BUILD; the core is then linked as C++. When DYNARMIC_BUILD has no
+# build yet, the makefile runs the script itself (once, while it is read), so
+# a plain `make JIT=1` is enough, as on the buildbot: a MinGW CC cross-builds
+# it for Windows, and the macOS arm64 cross build gets that architecture.
 LINK := $(CC)
 ifeq ($(JIT), 1)
 DYNARMIC_BUILD ?= build/dynarmic
+ifeq ($(wildcard $(DYNARMIC_BUILD)/libs.txt),)
+DYNARMIC_CMAKE_ARGS := -DCMAKE_C_COMPILER=$(firstword $(CC)) -DCMAKE_CXX_COMPILER=$(firstword $(CXX))
+ifneq (,$(findstring mingw,$(CC)))
+ifneq ($(OS),Windows_NT)
+DYNARMIC_CMAKE_ARGS += -DCMAKE_SYSTEM_NAME=Windows
+endif
+endif
+ifeq ($(platform), osx)
+ifneq (,$(findstring arm64,$(LIBRETRO_APPLE_PLATFORM)))
+DYNARMIC_CMAKE_ARGS += -DCMAKE_OSX_ARCHITECTURES=arm64
+endif
+endif
+$(info Building dynarmic into $(DYNARMIC_BUILD))
+DYNARMIC_STATUS := $(shell sh $(CORE_DIR)/tools/build_dynarmic.sh $(DYNARMIC_BUILD) $(DYNARMIC_CMAKE_ARGS) >&2 && echo ok)
+ifneq ($(DYNARMIC_STATUS),ok)
+$(error Building dynarmic failed (tools/build_dynarmic.sh))
+endif
+endif
 DYNARMIC_LIBS  := $(shell cat $(DYNARMIC_BUILD)/libs.txt 2>/dev/null)
 CXXFLAGS += -std=c++20 -O2 $(fpic) -I$(CORE_DIR)/src \
 	-I$(CORE_DIR)/external/dynarmic/src -I$(CORE_DIR)/external/dynarmic/externals/mcl/include

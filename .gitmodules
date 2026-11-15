@@ -1,3 +1,6 @@
 [submodule "external/dynarmic"]
 	path = external/dynarmic
 	url = https://github.com/azahar-emu/dynarmic.git
+[submodule "external/boost"]
+	path = external/boost
+	url = https://github.com/azahar-emu/ext-boost

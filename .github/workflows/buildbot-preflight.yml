@@ -1,0 +1,64 @@
+# Dry run of .gitlab-ci.yml (JIT on the 64-bit desktops) before it reaches the
+# buildbot: each job builds the way its libretro ci-template does, with the
+# job's variables as environment, on the nearest toolchain GitHub can run.
+# Test branch only.
+name: buildbot-preflight
+on:
+  push:
+    branches: [jit-buildbot]
+
+jobs:
+  linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # libretro-build-amd64-ubuntu:backports (gcc-12, newer cmake)
+          - { name: x64-jit, runner: ubuntu-24.04, img: "ubuntu:jammy", pkgs: "build-essential g++-12 cmake git", env: "CC=gcc-12 CXX=g++-12 JIT=1" }
+          # libretro-build-aarch64-ubuntu (noble, gcc 14)
+          - { name: aarch64-jit, runner: ubuntu-24.04-arm, img: "ubuntu:noble", pkgs: "build-essential cmake git", env: "CC=gcc CXX=g++ JIT=1" }
+          - { name: i686, runner: ubuntu-24.04, img: "i386/ubuntu:bionic --platform linux/386", pkgs: "build-essential", env: "CC=gcc CXX=g++" }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - run: docker run --rm -v "$PWD":/src -w /src ${{ matrix.img }} sh -c 'apt-get -o Acquire::Retries=5 update -qq && DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -yqq ${{ matrix.pkgs }} >/dev/null && git config --global --add safe.directory "*" && env platform=unix ${{ matrix.env }} make -f Makefile.libretro -j4 && ls -la flashem_libretro.so && (nm -D flashem_libretro.so | grep -c " T retro_")'
+
+  windows:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # libretro-build-mxe-win-cross-cores:gcc16 (MinGW, cmake)
+          - { arch: x86_64, env: "JIT=1" }
+          - { arch: i686, env: "" }
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - run: docker run --rm -v "$PWD":/src -w /src ubuntu:noble sh -c 'apt-get -o Acquire::Retries=5 update -qq && DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -yqq make cmake git g++-mingw-w64-x86-64-posix g++-mingw-w64-i686-posix >/dev/null && git config --global --add safe.directory "*" && env platform=win64 CC=${{ matrix.arch }}-w64-mingw32-gcc-posix CXX=${{ matrix.arch }}-w64-mingw32-g++-posix ${{ matrix.env }} make -f Makefile.libretro -j4 && ls -la flashem_libretro.dll && x86_64-w64-mingw32-objdump -p flashem_libretro.dll | grep "DLL Name"'
+
+  android:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - run: $ANDROID_NDK_LATEST_HOME/ndk-build -j4 -C jni APP_ABI="armeabi-v7a arm64-v8a x86 x86_64" && ls -la libs/*/
+
+  apple:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: macos-15-intel, platform: osx, env: "JIT=1", check: "lipo -info flashem_libretro.dylib | grep x86_64" }
+          - { runner: macos-15, platform: osx, env: "JIT=1 CROSS_COMPILE=1 LIBRETRO_APPLE_PLATFORM=arm64-apple-macos10.15", check: "lipo -info flashem_libretro.dylib | grep arm64" }
+          - { runner: macos-15, platform: ios-arm64, env: "", check: "vtool -show flashem_libretro_ios.dylib | grep IOS" }
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with: { submodules: recursive }
+      - run: |
+          export LIBRETRO_APPLE_ISYSROOT=$(xcodebuild -version -sdk macosx Path)
+          env platform=${{ matrix.platform }} CC=clang CXX=clang++ ${{ matrix.env }} make -f Makefile.libretro -j4 platform=${{ matrix.platform }}
+          ${{ matrix.check }}
+          otool -L flashem_libretro*.dylib
