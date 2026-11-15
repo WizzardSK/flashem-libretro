@@ -17,7 +17,7 @@ jobs:
           - { name: x64-jit, runner: ubuntu-24.04, img: "ubuntu:jammy", pkgs: "build-essential g++-12 cmake git", env: "CC=gcc-12 CXX=g++-12 JIT=1" }
           # libretro-build-aarch64-ubuntu (noble, gcc 14)
           - { name: aarch64-jit, runner: ubuntu-24.04-arm, img: "ubuntu:noble", pkgs: "build-essential cmake git", env: "CC=gcc CXX=g++ JIT=1" }
-          - { name: i686, runner: ubuntu-24.04, img: "i386/ubuntu:bionic --platform linux/386", pkgs: "build-essential", env: "CC=gcc CXX=g++" }
+          - { name: i686, runner: ubuntu-24.04, img: "--platform linux/386 i386/ubuntu:bionic", pkgs: "build-essential", env: "CC=gcc CXX=g++" }
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
@@ -29,14 +29,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # libretro-build-mxe-win-cross-cores:gcc16 (MinGW, cmake)
-          - { arch: x86_64, env: "JIT=1" }
-          - { arch: i686, env: "" }
+          # libretro-build-mxe-win-cross-cores:gcc16: MXE with mingw-w64 14 (xbyak
+          # needs its newer Windows headers), so Arch's mingw-w64 for the JIT job
+          - { arch: x86_64, env: "JIT=1", img: "archlinux:latest", setup: "pacman -Sy --noconfirm --needed mingw-w64-gcc cmake make git >/dev/null", cc: "x86_64-w64-mingw32-gcc", cxx: "x86_64-w64-mingw32-g++" }
+          - { arch: i686, env: "", img: "ubuntu:noble", setup: "apt-get -o Acquire::Retries=5 update -qq && DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -yqq make gcc-mingw-w64-i686 >/dev/null", cc: "i686-w64-mingw32-gcc", cxx: "i686-w64-mingw32-g++" }
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
-      - run: docker run --rm -v "$PWD":/src -w /src ubuntu:noble sh -c 'apt-get -o Acquire::Retries=5 update -qq && DEBIAN_FRONTEND=noninteractive apt-get -o Acquire::Retries=5 install -yqq make cmake git g++-mingw-w64-x86-64-posix g++-mingw-w64-i686-posix >/dev/null && git config --global --add safe.directory "*" && env platform=win64 CC=${{ matrix.arch }}-w64-mingw32-gcc-posix CXX=${{ matrix.arch }}-w64-mingw32-g++-posix ${{ matrix.env }} make -f Makefile.libretro -j4 && ls -la flashem_libretro.dll && x86_64-w64-mingw32-objdump -p flashem_libretro.dll | grep "DLL Name"'
+      - run: docker run --rm -v "$PWD":/src -w /src ${{ matrix.img }} sh -c '${{ matrix.setup }} && git config --global --add safe.directory "*" 2>/dev/null; env platform=win64 CC=${{ matrix.cc }} CXX=${{ matrix.cxx }} ${{ matrix.env }} make -f Makefile.libretro -j4 && ls -la flashem_libretro.dll'
 
   android:
     runs-on: ubuntu-24.04
