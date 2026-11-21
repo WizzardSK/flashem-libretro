@@ -9,6 +9,33 @@ void zsp400_reset(ZSP400 *s) {
     memset(s->shadow,0,sizeof s->shadow);
     memset(s->timer_reload,0,sizeof s->timer_reload);
     memset(s->timer_div,0,sizeof s->timer_div);
+    s->tskip=s->tskipped=0;
+}
+/* The skipped ticks' divider counts, before anything looks at the timers
+ * (they stay below the period: the skip ends before a timer would count) */
+static inline void timers_catch_up(ZSP400 *s) {
+    if(!s->tskipped) return;
+    for(unsigned i=0;i<2;i++) {
+        unsigned t=(s->c[1]>>(8*i))&255;
+        if((t&128) && s->c[23+i]) s->timer_div[i]=(uint8_t)(s->timer_div[i]+s->tskipped);
+    }
+    s->tskipped=0;
+}
+/* After a tick: how many of the next ticks can only count dividers up -
+ * none while an enabled interrupt is pending, else until a timer's next
+ * count (#7: the movie decoder's every instruction went through tick) */
+static inline void plan_skip(ZSP400 *s) {
+    s->tskip=0;
+    if((s->c[2]&0x8000) && (s->c[9]&s->c[2]&0x3fff)) return;
+    uint32_t k=1u<<30;
+    if(s->c[1]&0x8080) for(unsigned i=0;i<2;i++) {
+        unsigned t=(s->c[1]>>(8*i))&255;
+        if(!(t&128) || !s->c[23+i]) continue;
+        unsigned period=(t&63)+1, d=s->timer_div[i];
+        uint32_t left=d+1u>=period ? 0 : period-1u-d;
+        if(left<k) k=left;
+    }
+    s->tskip=k;
 }
 static void flags(ZSP400 *s, int32_t v, uint32_t result, int carry) {
     s->flags=(s->flags & ~(F_Z|F_GT|F_GE|F_C)) |
@@ -91,6 +118,7 @@ static uint16_t shift16(ZSP400 *s,uint16_t a,unsigned n,unsigned op) {
     return v;
 }
 static void set_control(ZSP400 *s,unsigned n,uint16_t v,uint16_t *next) {
+    timers_catch_up(s); s->tskip=0;
     if(n==15 && ((s->c[n]^v)&0x1000))
         for(unsigned i=0;i<8;i++) { uint16_t t=s->r[i+2]; s->r[i+2]=s->shadow[i]; s->shadow[i]=t; }
     if(n==8) s->flags=v;
@@ -100,9 +128,9 @@ static void set_control(ZSP400 *s,unsigned n,uint16_t v,uint16_t *next) {
     }
     s->c[n]=v; if(n==16) *next=v;
 }
-void zsp400_request_irq(ZSP400 *s,unsigned line) { if(line<14) s->c[9]|=1u<<line; }
+void zsp400_request_irq(ZSP400 *s,unsigned line) { timers_catch_up(s); s->tskip=0; if(line<14) s->c[9]|=1u<<line; }
 /* The interrupt tick() would take now, or 14 for none */
-static unsigned next_irq(const ZSP400 *s,unsigned *priority_out) {
+static inline unsigned next_irq(const ZSP400 *s,unsigned *priority_out) {
     if(!(s->c[2]&0x8000)) return 14;
     unsigned pending=s->c[9]&s->c[2]&0x3fff, best=14, priority=0;
     for(unsigned i=0;pending>>i;i++) if(pending&(1u<<i)) {
@@ -114,6 +142,7 @@ static unsigned next_irq(const ZSP400 *s,unsigned *priority_out) {
 }
 uint64_t zsp400_sleep(ZSP400 *s,uint64_t max) {
     unsigned priority;
+    timers_catch_up(s); s->tskip=0;
     if(s->fault || !(s->c[15]&0x6000) || (s->c[15]&0x8000)) return 0;
     if((s->flags&4u)!=(s->c[9]?4u:0) || next_irq(s,&priority)!=14) return 0;
     /* steps until a running timer reaches 0, the first step that changes
@@ -140,7 +169,7 @@ uint64_t zsp400_sleep(ZSP400 *s,uint64_t max) {
     return k;
 }
 /* The on-chip SRAM where the memory mode maps it (zevio_dsp.c core_memory) */
-static uint8_t *sram(ZSP400 *s,uint16_t a,int program) {
+static inline uint8_t *sram(ZSP400 *s,uint16_t a,int program) {
     uint16_t mode=s->c[15];
     if(program) return s->iram && a<0x4000 && (!(mode&2)||(mode&0x400)) ? s->iram+2u*a : NULL;
     return s->dram && a<0xa000 && !(mode&1) ? s->dram+2u*a : NULL;
@@ -168,9 +197,17 @@ static inline void tick(ZSP400 *s) {
     s->pc=((s->c[15]&128)?0:0xf800)+0x80-8*best;
     s->c[15]&=~0x6000;
 }
-static inline int step(ZSP400 *s) {
+/* always inlined into zsp400_run's loop: as a call per instruction its
+ * prologue and stack guard were a good part of the movie decoder's time */
+#if defined(__GNUC__)
+#define ZSP_INLINE static inline __attribute__((always_inline))
+#else
+#define ZSP_INLINE static inline
+#endif
+ZSP_INLINE int step(ZSP400 *s) {
     if(s->fault || (s->c[15]&0x8000)) return 0;
-    tick(s);
+    if(s->tskip) { s->tskip--; s->tskipped++; }
+    else { timers_catch_up(s); tick(s); plan_skip(s); }
     if(s->c[15]&0x6000) return 1; /* peripheral clocks still advance */
     uint16_t pc=s->pc, next=pc+1, w;
     const uint8_t *ip=sram(s,pc,1);
@@ -244,15 +281,19 @@ static inline int step(ZSP400 *s) {
         }
         if(update && y<=12 && (s->c[14]&(top==7?1:2))) goto unsupported;
         int program=!!(s->c[15] & (top==7?32:16));
-        uint16_t values[2]={s->r[x],s->r[(x+1)&15]};
+        /* two scalars, not an array: an array here put a stack guard on
+         * every step */
+        uint16_t v0=s->r[x], v1=s->r[(x+1)&15];
         for(int i=0;i<count;++i) {
             uint16_t at=cb_end && (unsigned)addr+i>=cb_end?cb_begin+(unsigned)addr+i-cb_end:(unsigned)addr+i;
+            uint16_t v=i?v1:v0;
             uint8_t *m=sram(s,at,program);
-            if(m) { if(top==7) values[i]=(uint16_t)(m[0]|m[1]<<8); else { m[0]=(uint8_t)values[i]; m[1]=(uint8_t)(values[i]>>8); } }
-            else if(top==7) values[i]=s->read(s->ctx,at,program);
-            else s->write(s->ctx,at,values[i],program);
+            if(m) { if(top==7) v=(uint16_t)(m[0]|m[1]<<8); else { m[0]=(uint8_t)v; m[1]=(uint8_t)(v>>8); } }
+            else if(top==7) v=s->read(s->ctx,at,program);
+            else s->write(s->ctx,at,v,program);
+            if(i) v1=v; else v0=v;
         }
-        if(top==7) { s->r[x]=values[0]; if(count==2) s->r[x+1]=values[1]; }
+        if(top==7) { s->r[x]=v0; if(count==2) s->r[x+1]=v1; }
         if(update) s->r[y]=updated;
     } else if(top==8) {
         uint32_t v;

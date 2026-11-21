@@ -11,6 +11,10 @@ typedef struct {
     int fault;
     uint16_t shadow[8], timer_reload[2];
     uint8_t timer_div[2];
+    /* steps whose tick() would only count the timers' dividers up, and the
+     * ones skipped so far (added to the dividers before anything reads
+     * them) */
+    uint32_t tskip, tskipped;
     void *ctx;
     uint16_t (*read)(void *, uint16_t, int program);
     void (*write)(void *, uint16_t, uint16_t, int program);

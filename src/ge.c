@@ -269,11 +269,21 @@ static void sprite(GE *g, uint32_t hdr, uint32_t pc) {
     int t4444 = (f & 1) && (g->tex_fmt & 0x100);
     int da = dsta && (f & 1) && !t4444 && (blend & 0x43) == 0x42;
     const uint32_t flat = (f & 1) ? 0 : (rd(g, pc + 16) & 0xFFFF) | 0x100000u;
-    for (int y = ys; y < h; y++)
+    for (int y = ys; y < h; y++) {
+        /* the row's surface memory when px() would give every pixel of it
+         * (movies are full-screen sprites: px() per pixel was a good part of
+         * their drawing, #7) */
+        uint8_t *row = NULL;
+        int yy0 = y0 + y;
+        if (x0 + xs >= 0 && x0 + w - 1 <= 1023 && yy0 >= g->top) {
+            uint32_t o = g->surface + (uint32_t)(yy0 >> 3) * 16384 + (uint32_t)(yy0 & 7) * 64 - RAM_BASE;
+            if ((uint64_t)o + 16384 <= g->ram_size) row = g->ram + o;
+        }
         for (int x = xs; x < w; x++) {
             uint32_t c = (f & 1) ? tex_get(g, u0 + x, v0 + y) : flat;
             uint16_t *p;
-            if (c && (p = px(g, x0 + x, y0 + y))) {
+            int xx0 = x0 + x;
+            if (c && (p = row ? (uint16_t *)(row + (xx0 >> 5) * 512) + (xx0 & 31) : px(g, xx0, yy0))) {
                 int yy = y0 + y, xx = x0 + x;
                 int in = yy >= 0 && yy < 1024 && xx >= 0 && xx < 1024;
                 if (sdepth && in) {
@@ -297,6 +307,7 @@ static void sprite(GE *g, uint32_t hdr, uint32_t pc) {
                 if (watch_x >= 0) watch(g, x0 + x, y0 + y, *p);
             }
         }
+    }
 }
 
 /* ---- 3D models (first pass) ----

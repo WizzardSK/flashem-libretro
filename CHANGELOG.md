@@ -4,7 +4,7 @@ What changed in FlashEm, newest first. Releases are builds of the libretro core 
 
 ## November 2026
 
-- Movies about an eighth faster: the DSP that decodes them no longer looks for an interrupt after every instruction when none it has enabled is pending. Bratz Fashion Pixiez's movies 8.4 to 9.4 frames per second on a Snapdragon 7c, frame for frame the same (#7). `VFLASH_DSPPROF=n` prints the DSP's most executed addresses every n runs.
+- Movies about two fifths faster: the DSP that decodes them counts its timers in batches instead of after every instruction, looks for an interrupt only when one it has enabled is pending, and runs its instructions in one inlined loop; movie frames are drawn a row at a time. Bratz Fashion Pixiez's movies 8.4 to 11.8 frames per second on a Snapdragon 7c, frame for frame the same (#7). `VFLASH_DSPPROF=n` prints the DSP's most executed addresses every n runs.
 - Faster triangles, most of all full-screen 2D layers: the bilinear texture filter works in integers, a triangle with one depth at all corners skips the per-pixel division, a pixel on a texel's centre reads one texel instead of four, and opaque pixels are written without the blend. Bratz Fashion Pixiez's transition screens about 14 % faster on a Snapdragon 7c (15.4 to 17.5 and 12.2 to 13.9 frames per second), with the same picture (#7).
 - The libretro buildbot's 64-bit Windows, Linux and macOS builds run the ARM9 on the dynarmic JIT too, as the GitHub releases do: `make -f Makefile.libretro JIT=1` now builds dynarmic itself with CMake (cross-compiling it for Windows with MinGW), and its Boost headers come from a submodule (`external/boost`), so nothing has to be installed. 32-bit, Android and iOS builds keep the interpreter.
 
