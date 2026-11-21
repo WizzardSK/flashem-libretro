@@ -198,11 +198,29 @@ static void dsp_prof_report(void) {
 void zevio_dsp_run(ZevioDSP *z,uint64_t budget) {
     if(!z->running) return;
     static int prof=-1; static unsigned calls;
+    static long calls_left=-1;
+    if(calls_left<0) calls_left=getenv("VFLASH_DSPCALLS")?atol(getenv("VFLASH_DSPCALLS")):0;
     if(prof<0) prof=getenv("VFLASH_DSPPROF")?atoi(getenv("VFLASH_DSPPROF")):0;
     while(budget) {
         if(z->core.c[15]&0x6000) {   /* asleep: timers only */
             uint64_t slept=zsp400_sleep(&z->core,budget);
             if(slept) { budget-=slept; if(prof) prof_sleep+=slept; continue; }
+        }
+        if(calls_left) {
+            /* VFLASH_DSPCALLS=n: calls, returns and interrupt entries with
+             * the instruction count, to see the firmware's call graph */
+            uint16_t pc=z->core.pc, w=core_read(z,pc,1);
+            unsigned top=w>>12;
+            int is_call=top==1 || ((w&0xff0f)==0xa700), is_ret=w==0xbf01 || w==0xbf02;
+            uint16_t before=pc;
+            if(!zsp400_step(&z->core)) break;
+            budget--;
+            if(is_call || is_ret || (z->core.pc!=(uint16_t)(before+1) && top!=0 && top!=4 && !is_call && !is_ret && z->core.pc<0x100)) {
+                fprintf(stderr,"[ZCALL] %llu %04x %s %04x\n",(unsigned long long)z->core.instructions,before,
+                        is_call?"call":is_ret?"ret":"irq",z->core.pc);
+                calls_left--;
+            }
+            continue;
         }
         if(prof) {
             prof_pc[z->core.pc]++; prof_steps++;
