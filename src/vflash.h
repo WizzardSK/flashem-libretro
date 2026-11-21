@@ -90,6 +90,12 @@ int       vflash_memcard_save(VFlash *vf, const char *path);
  * Boot ROM picks its own. Right after vflash_create(), before the first frame.
  * 0 for a name it does not know. */
 int       vflash_set_language(VFlash *vf, const char *name);
+/* Save states: the size, and save / load into a buffer at least that big;
+ * 0 on failure. A state loads only into the same build of the emulator; the
+ * memory card is not part of it. */
+size_t    vflash_state_size(VFlash *vf);
+int       vflash_state_save(VFlash *vf, void *data, size_t size);
+int       vflash_state_load(VFlash *vf, const void *data, size_t size);
 void      vflash_destroy(VFlash *vf);
 void      vflash_run_frame(VFlash *vf);
 /* 1 while the ROM is still starting a disc's game (see hw_booting) and fast

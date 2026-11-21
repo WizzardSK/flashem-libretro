@@ -37,6 +37,8 @@ void jit_irq_lines(const int *lines);
 /* The CPU was reset by a device write: the running code stops there and
  * leaves the reset state alone */
 void jit_reset(void);
+/* All of memory was replaced (a loaded save state): drops all translated code */
+void jit_flush(void);
 /* With VFLASH_JITSTATS, prints and resets the JIT's counters */
 void jit_stats(void);
 

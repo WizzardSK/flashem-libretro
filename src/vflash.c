@@ -132,6 +132,25 @@ int vflash_set_language(VFlash *vf, const char *name) {
     return 0;
 }
 
+/* Save states: the machine (hw_state_*) and the picture last shown, so that
+ * a loaded state shows its own frame before the game draws the next. */
+size_t vflash_state_size(VFlash *vf) {
+    return hw_state_size(vf->hw) + sizeof vf->framebuf;
+}
+
+int vflash_state_save(VFlash *vf, void *data, size_t size) {
+    if (size < vflash_state_size(vf) || !hw_state_save(vf->hw, data, size)) return 0;
+    memcpy((uint8_t *)data + hw_state_size(vf->hw), vf->framebuf, sizeof vf->framebuf);
+    return 1;
+}
+
+int vflash_state_load(VFlash *vf, const void *data, size_t size) {
+    if (size < vflash_state_size(vf) || !hw_state_load(vf->hw, data, size)) return 0;
+    memcpy(vf->framebuf, (const uint8_t *)data + hw_state_size(vf->hw), sizeof vf->framebuf);
+    audio_clear(vf->audio);
+    return 1;
+}
+
 int vflash_memcard_save(VFlash *vf, const char *path) {
     uint32_t len;
     uint8_t *mc = hw_memcard(vf->hw, &len);

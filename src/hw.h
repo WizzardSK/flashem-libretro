@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include <stddef.h>
 #include <stdio.h>
 #include "arm9.h"
 
@@ -36,6 +37,12 @@ int      hw_memcard_dirty(HW *hw, int clear);
  * (0x7A Dutch ... 0x7F English US, see hw.c); 0 for any other code. Before
  * the first instruction. */
 int      hw_set_language(HW *hw, int code);
+/* Save states (see hw.c): the size, and save / load into a buffer of at
+ * least that size; 0 on failure (a load leaves the machine as it was when
+ * the state does not fit this build). */
+size_t   hw_state_size(HW *hw);
+int      hw_state_save(HW *hw, void *data, size_t size);
+int      hw_state_load(HW *hw, const void *data, size_t size);
 
 /* One instruction, with interrupts and timers; returns cycles taken. */
 int      hw_step(HW *hw);

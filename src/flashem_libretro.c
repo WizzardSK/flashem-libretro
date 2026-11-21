@@ -449,13 +449,20 @@ void retro_unload_game(void)
 
 unsigned retro_get_region(void) { return RETRO_REGION_NTSC; }
 
-/* Save states need a serialiser the emulator does not have yet: the ARM core,
- * the MMU, the CD-ROM position and the JIT's state would all have to go out and
- * come back. Claiming a size here and writing nothing would break rewind,
- * run-ahead and netplay in ways that look like emulation bugs. */
-size_t retro_serialize_size(void) { return 0; }
-bool retro_serialize(void *data, size_t size) { (void)data; (void)size; return false; }
-bool retro_unserialize(const void *data, size_t size) { (void)data; (void)size; return false; }
+/* Save states (and with them rewind and run-ahead): the whole machine, see
+ * vflash_state_save. A state loads only into the same build of the core. */
+size_t retro_serialize_size(void) { return s_vf ? vflash_state_size(s_vf) : 0; }
+bool retro_serialize(void *data, size_t size)
+{
+   return s_vf && vflash_state_save(s_vf, data, size);
+}
+bool retro_unserialize(const void *data, size_t size)
+{
+   if (!s_vf || !vflash_state_load(s_vf, data, size))
+      return false;
+   s_audio_count = s_audio_offset = 0;
+   return true;
+}
 
 void *retro_get_memory_data(unsigned id) { (void)id; return NULL; }
 size_t retro_get_memory_size(unsigned id) { (void)id; return 0; }
