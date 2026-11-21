@@ -1102,8 +1102,8 @@ static void run(GE *g, uint32_t pc, uint32_t end, int depth) {
     if (g->log) printf("[GE] runaway list %08X (depth %d, now at %08X)\n", cur_list, depth, pc);
 }
 
+static int init;   /* zbuf filled far; set by a loaded state too */
 void ge_run(GE *g, uint32_t list) {
-    static int init;
     if (!init) {
         init = 1;
         if (getenv("VFLASH_GEWATCH")) sscanf(getenv("VFLASH_GEWATCH"), "%d,%d", &watch_x, &watch_y);
@@ -1116,4 +1116,33 @@ void ge_run(GE *g, uint32_t list) {
     cur_list = list; prev_w = prev_pc = 0;
     if (list - RAM_BASE >= g->ram_size) return;   /* the ROM kicks list 0 at boot */
     run(g, list, 0, 0);
+}
+
+/* Save states: the engine state kept in this file rather than in GE - the
+ * depth and alpha buffers and the render registers. */
+struct ge_vars {
+    uint32_t blend, blend_k, reg1c, rflags, fog_col, fog_start, fog_end;
+    int32_t  zenable, zfill, up_x, up_y, up_w, up_h;
+};
+size_t ge_state_size(void) {
+    return sizeof(struct ge_vars) + sizeof zbuf + sizeof abuf;
+}
+void ge_state_save(uint8_t *p) {
+    struct ge_vars v = { blend, blend_k, reg1c, rflags, fog_col, fog_start, fog_end,
+                         zenable, zfill, up_x, up_y, up_w, up_h };
+    if (!init) for (int i = 0; i < 1024 * 1024; i++) zbuf[i] = 1e30f;   /* as ge_run will */
+    memcpy(p, &v, sizeof v); p += sizeof v;
+    memcpy(p, zbuf, sizeof zbuf); p += sizeof zbuf;
+    memcpy(p, abuf, sizeof abuf);
+}
+void ge_state_load(const uint8_t *p) {
+    struct ge_vars v;
+    memcpy(&v, p, sizeof v); p += sizeof v;
+    blend = v.blend; blend_k = v.blend_k; reg1c = v.reg1c; rflags = v.rflags;
+    fog_col = v.fog_col; fog_start = v.fog_start; fog_end = v.fog_end;
+    zenable = v.zenable; zfill = v.zfill;
+    up_x = v.up_x; up_y = v.up_y; up_w = v.up_w; up_h = v.up_h;
+    memcpy(zbuf, p, sizeof zbuf); p += sizeof zbuf;
+    memcpy(abuf, p, sizeof abuf);
+    init = 1;
 }

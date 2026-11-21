@@ -422,8 +422,38 @@ int main(int argc, char **argv) {
             if (dbg_ret == DBG_PAUSE) goto render;
         }
 
-        /* Run one emulator frame */
-        vflash_run_frame(vf);
+        /* VFLASH_STATE_LOAD=<file>: start from a save state (before the
+         * first frame); VFLASH_STATE_SAVE=<frame>,<file>: write one after
+         * that many frames of this run. For testing save states headless. */
+        {
+            static int state_frames = -1, save_at = -1;
+            static const char *save_path;
+            if (state_frames < 0) {
+                state_frames = 0;
+                const char *l = getenv("VFLASH_STATE_LOAD"), *sv = getenv("VFLASH_STATE_SAVE");
+                if (sv && strchr(sv, ',')) { save_at = atoi(sv); save_path = strchr(sv, ',') + 1; }
+                if (l) {
+                    FILE *f = fopen(l, "rb");
+                    size_t n = vflash_state_size(vf);
+                    void *b = malloc(n);
+                    int ok = f && b && fread(b, 1, n, f) == n && vflash_state_load(vf, b, n);
+                    fprintf(stderr, "[STATE] load %s: %s\n", l, ok ? "ok" : "FAILED");
+                    if (f) fclose(f);
+                    free(b);
+                }
+            }
+            vflash_run_frame(vf);
+            if (++state_frames == save_at) {
+                size_t n = vflash_state_size(vf);
+                void *b = malloc(n);
+                FILE *f = b && vflash_state_save(vf, b, n) ? fopen(save_path, "wb") : NULL;
+                int ok = f && fwrite(b, 1, n, f) == n;
+                if (f && fclose(f)) ok = 0;
+                fprintf(stderr, "[STATE] save %s (%zu bytes) at frame %d: %s\n",
+                        save_path, n, save_at, ok ? "ok" : "FAILED");
+                free(b);
+            }
+        }
 
         /* The console's LEDs, when they change */
         {

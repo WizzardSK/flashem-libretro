@@ -52,8 +52,9 @@ playability across every title, revision, or game mode.
   Performance varies by scene and host; full speed is not guaranteed.
 - Audio envelopes, finite-duration master-volume ramps, precise gain and
   interpolation, and sound interrupt generation remain incomplete.
-- There are no save states or serialization-based features such as rewind,
-  run-ahead, or netplay. The libretro core also has no reset implementation,
+- Save states (with rewind and run-ahead) work in the libretro core; a state
+  loads only into the same build of the core, and the memory card is not part
+  of it. The libretro core has no reset implementation,
   disk swapping, cheats, or persistent save-memory interface; its core
   options are Boot ROM, Console Language and CPU Emulation (JIT or Interpreter).
   Reload the content to restart it.

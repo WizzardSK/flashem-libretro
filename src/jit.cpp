@@ -385,6 +385,14 @@ extern "C" void jit_shutdown(void) {
 
 extern "C" int jit_active(void) { return g_bridge != nullptr; }
 
+extern "C" void jit_flush(void) {
+    if (!g_bridge) return;
+    Bridge &b = *g_bridge;
+    b.jit->ClearCache();
+    b.forget_code();
+    b.clear_table();
+}
+
 namespace {
 
 // One run of dynarmic - or with step, one instruction - and the

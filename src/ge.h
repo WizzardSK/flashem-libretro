@@ -1,5 +1,6 @@
 #pragma once
 #include <stdint.h>
+#include <stddef.h>
 
 /* The ZEVIO 1020's graphics engine (the 3D core co-developed with KOTO),
  * driven through the 0xA8000000 block by command lists in SDRAM. See ge.c
@@ -28,6 +29,10 @@ typedef struct GE {
 } GE;
 
 void ge_run(GE *g, uint32_t list);
+/* Save states: the engine's own buffers and registers (one engine) */
+size_t ge_state_size(void);
+void   ge_state_save(uint8_t *p);
+void   ge_state_load(const uint8_t *p);
 
 /* The engine's 16-bit float: sign (bit 15), exponent (bits 14-9, bias 31),
  * mantissa (bits 8-0, leading 1 implied); 0x0000 reads as 0. The game

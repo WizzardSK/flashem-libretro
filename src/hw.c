@@ -1769,6 +1769,107 @@ int hw_memcard_dirty(HW *hw, int clear) {
     return d;
 }
 
+/* ---------------------------------------------------------------- save states */
+
+/* A save state is the CPU, this struct, SDRAM, the system flash and the
+ * graphics engine's own buffers, copied as they are: it loads only into the
+ * same build (sizes and layout are checked). Host pointers, the debugging
+ * settings and the TLB are not state - they are kept from the running
+ * machine, and the TLB and the JIT's code start again empty. The memory
+ * card is not in it: like a real card, it keeps what was last written. */
+#define HW_STATE_MAGIC   0x54534C46u   /* "FLST" */
+#define HW_STATE_VERSION 1u
+struct hw_state_hdr { uint32_t magic, version, cpu, hw, ram, sf, ge, pad; };
+static void tlb_flush(HW *hw);
+
+size_t hw_state_size(HW *hw) {
+    (void)hw;
+    return sizeof(struct hw_state_hdr) + sizeof(ARM9) + sizeof(HW) + RAM_SIZE
+         + SF_SIZE + ge_state_size();
+}
+
+int hw_state_save(HW *hw, void *data, size_t size) {
+    if (size < hw_state_size(hw)) return 0;
+    uint8_t *p = data;
+    struct hw_state_hdr h = { HW_STATE_MAGIC, HW_STATE_VERSION, sizeof(ARM9),
+                              sizeof(HW), RAM_SIZE, SF_SIZE, (uint32_t)ge_state_size(), 0 };
+    memcpy(p, &h, sizeof h);           p += sizeof h;
+    memcpy(p, hw->cpu, sizeof(ARM9));  p += sizeof(ARM9);
+    memcpy(p, hw, sizeof(HW));         p += sizeof(HW);
+    memcpy(p, hw->ram, RAM_SIZE);      p += RAM_SIZE;
+    if (hw->sf) memcpy(p, hw->sf, SF_SIZE); else memset(p, 0xFF, SF_SIZE);
+    p += SF_SIZE;
+    ge_state_save(p);
+    return 1;
+}
+
+int hw_state_load(HW *hw, const void *data, size_t size) {
+    const uint8_t *p = data;
+    struct hw_state_hdr h;
+    if (size < hw_state_size(hw)) return 0;
+    memcpy(&h, p, sizeof h);
+    if (h.magic != HW_STATE_MAGIC || h.version != HW_STATE_VERSION || h.cpu != sizeof(ARM9)
+        || h.hw != sizeof(HW) || h.ram != RAM_SIZE || h.sf != SF_SIZE || h.ge != ge_state_size())
+        return 0;
+    p += sizeof h;
+
+    ARM9 *c = hw->cpu, oc = *c;
+    HW *old = malloc(sizeof(HW));
+    if (!old) return 0;
+    memcpy(old, hw, sizeof(HW));
+
+    memcpy(c, p, sizeof(ARM9));  p += sizeof(ARM9);
+    c->mem_ctx = oc.mem_ctx;
+    c->mem_read32 = oc.mem_read32; c->mem_read16 = oc.mem_read16; c->mem_read8 = oc.mem_read8;
+    c->mem_write32 = oc.mem_write32; c->mem_write16 = oc.mem_write16; c->mem_write8 = oc.mem_write8;
+    c->mem_page = oc.mem_page; c->mem_page_rw = oc.mem_page_rw;
+    c->fetch_ptr = NULL;
+
+    memcpy(hw, p, sizeof(HW));   p += sizeof(HW);
+    /* host pointers */
+    hw->cpu = old->cpu; hw->rom = old->rom; hw->rom_size = old->rom_size;
+    hw->ram = old->ram; hw->cd = old->cd; hw->fb = old->fb;
+    hw->audio_ctx = old->audio_ctx; hw->audio_push = old->audio_push;
+    hw->mc = old->mc; hw->mc_dirty = old->mc_dirty; hw->sf = old->sf;
+    hw->dsp.disc = old->dsp.disc;
+    hw->zsp.ram = old->zsp.ram;
+    hw->zsp.core.ctx = old->zsp.core.ctx;
+    hw->zsp.core.read = old->zsp.core.read; hw->zsp.core.write = old->zsp.core.write;
+    hw->zsp.core.iram = old->zsp.core.iram; hw->zsp.core.dram = old->zsp.core.dram;
+    hw->midi.memory_ctx = old->midi.memory_ctx; hw->midi.read_sample = old->midi.read_sample;
+    hw->midi.trace_ctx = old->midi.trace_ctx; hw->midi.trace = old->midi.trace;
+    hw->ge.ram = old->ge.ram;
+    /* debugging settings and statistics */
+    hw->ve_log = old->ve_log; hw->dma_log = old->dma_log; hw->lcd_log = old->lcd_log;
+    hw->spi_log = old->spi_log; hw->ser_log = old->ser_log; hw->fault_log = old->fault_log;
+    hw->zsp.trace = old->zsp.trace;
+    hw->ge.log = old->ge.log; hw->ge.trace = old->ge.trace;
+    hw->ge.nodepth = old->ge.nodepth; hw->ge.no3d = old->ge.no3d;
+    hw->hist_on = old->hist_on; hw->hist_from = old->hist_from; hw->hist_to = old->hist_to;
+    hw->hist_page = old->hist_page;
+    memcpy(hw->trace_pc, old->trace_pc, sizeof hw->trace_pc); hw->ntrace = old->ntrace;
+    hw->trace_left = old->trace_left; hw->trace_from = old->trace_from;
+    hw->puts_pc = old->puts_pc; hw->puts_reg = old->puts_reg;
+    hw->watch_lo = old->watch_lo; hw->watch_len = old->watch_len;
+    hw->prof_on = old->prof_on;
+    memcpy(hw->bp, old->bp, sizeof hw->bp); hw->nbp = old->nbp; hw->bp_hit = 0;
+    free(old);
+
+    memcpy(hw->ram, p, RAM_SIZE);  p += RAM_SIZE;
+    if (hw->sf) memcpy(hw->sf, p, SF_SIZE);
+    p += SF_SIZE;
+    ge_state_load(p);
+
+    /* translations start again: the TLB, the CPU's fetch page, the JIT */
+    hw->pt_ttb = ~hw->cpu->cp15.ttb;
+    tlb_flush(hw);
+#ifdef FLASHEM_JIT
+    jit_flush();
+    jit_irq_lines(hw->ic.line);
+#endif
+    return 1;
+}
+
 /* ---------------------------------------------------------------- display */
 
 /* 0xA8000000: the display controller. The kernel clears 0xCD registers, then
