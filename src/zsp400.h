@@ -20,6 +20,7 @@ typedef struct {
 } ZSP400;
 void zsp400_reset(ZSP400 *s);
 int zsp400_step(ZSP400 *s);
+uint64_t zsp400_run(ZSP400 *s, uint64_t n);
 void zsp400_request_irq(ZSP400 *s, unsigned line);
 /* While the core sleeps and no interrupt can be taken, steps only count its
  * timers down: runs up to max of them at once, stopping before the one

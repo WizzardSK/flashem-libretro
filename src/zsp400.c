@@ -145,7 +145,7 @@ static uint8_t *sram(ZSP400 *s,uint16_t a,int program) {
     if(program) return s->iram && a<0x4000 && (!(mode&2)||(mode&0x400)) ? s->iram+2u*a : NULL;
     return s->dram && a<0xa000 && !(mode&1) ? s->dram+2u*a : NULL;
 }
-static void tick(ZSP400 *s) {
+static inline void tick(ZSP400 *s) {
     if(s->c[1]&0x8080) for(unsigned i=0;i<2;i++) {
         unsigned t=(s->c[1]>>(8*i))&255;
         if((t&128) && s->c[23+i] && ++s->timer_div[i]>=(t&63)+1) {
@@ -157,6 +157,8 @@ static void tick(ZSP400 *s) {
         }
     }
     s->flags=(s->flags&~4u)|(s->c[9]?4:0);
+    /* nothing pending that is enabled: the usual case, every step (#7) */
+    if(!(s->c[2]&0x8000) || !(s->c[9]&s->c[2]&0x3fff)) return;
     unsigned priority, best=next_irq(s,&priority);
     if(best==14) return;
     s->c[18]=s->pc; /* between instructions: PC is already the next instruction */
@@ -166,7 +168,7 @@ static void tick(ZSP400 *s) {
     s->pc=((s->c[15]&128)?0:0xf800)+0x80-8*best;
     s->c[15]&=~0x6000;
 }
-int zsp400_step(ZSP400 *s) {
+static inline int step(ZSP400 *s) {
     if(s->fault || (s->c[15]&0x8000)) return 0;
     tick(s);
     if(s->c[15]&0x6000) return 1; /* peripheral clocks still advance */
@@ -358,4 +360,20 @@ int zsp400_step(ZSP400 *s) {
     s->pc=next; ++s->instructions; return 1;
 unsupported:
     s->fault=1; s->fault_pc=pc; s->fault_op=w; return 0;
+}
+
+int zsp400_step(ZSP400 *s) { return step(s); }
+
+/* Up to n steps in one call, with step() inlined into the loop: the movie
+ * decoder runs some 25 million DSP instructions a second (#7). Stops early
+ * when the core faults, halts or goes to sleep (the caller fast-forwards
+ * sleep with zsp400_sleep); returns the steps taken. */
+uint64_t zsp400_run(ZSP400 *s, uint64_t n) {
+    uint64_t done = 0;
+    while (done < n) {
+        if (!step(s)) break;
+        done++;
+        if (s->c[15] & 0x6000) break;
+    }
+    return done;
 }

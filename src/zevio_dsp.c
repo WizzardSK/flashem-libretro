@@ -151,16 +151,43 @@ static void core_write(void *ctx,uint16_t a,uint16_t v,int program) {
     if(p) { p[0]=v; p[1]=v>>8; return; }
     z->core.fault=3; z->core.fault_pc=z->core.pc; z->core.fault_op=a;
 }
+/* VFLASH_DSPPROF=n (debugging): every n calls, the DSP's most executed
+ * program addresses since the last report, and how much it slept */
+static uint32_t prof_pc[0x10000];
+static uint64_t prof_sleep, prof_steps;
+static void dsp_prof_report(void) {
+    uint32_t top[16] = {0};
+    for(unsigned k=0;k<16;k++) {
+        uint32_t best=0; unsigned at=0;
+        for(unsigned i=0;i<0x10000;i++) if(prof_pc[i]>best) { int used=0; for(unsigned j=0;j<k;j++) if(top[j]==i) used=1; if(!used) { best=prof_pc[i]; at=i; } }
+        top[k]=at;
+        if(best) fprintf(stderr,"[DSPPROF] %04x %u\n",at,best);
+    }
+    fprintf(stderr,"[DSPPROF] steps %llu slept %llu\n",(unsigned long long)prof_steps,(unsigned long long)prof_sleep);
+    memset(prof_pc,0,sizeof prof_pc); prof_sleep=prof_steps=0;
+}
 void zevio_dsp_run(ZevioDSP *z,uint64_t budget) {
     if(!z->running) return;
+    static int prof=-1; static unsigned calls;
+    if(prof<0) prof=getenv("VFLASH_DSPPROF")?atoi(getenv("VFLASH_DSPPROF")):0;
     while(budget) {
         if(z->core.c[15]&0x6000) {   /* asleep: timers only */
             uint64_t slept=zsp400_sleep(&z->core,budget);
-            if(slept) { budget-=slept; continue; }
+            if(slept) { budget-=slept; if(prof) prof_sleep+=slept; continue; }
         }
-        if(!zsp400_step(&z->core)) break;
-        budget--;
+        if(prof) {
+            prof_pc[z->core.pc]++; prof_steps++;
+            if(!zsp400_step(&z->core)) break;
+            budget--;
+            continue;
+        }
+        /* awake: a run of steps; it ends early at a fault or sleep */
+        uint64_t done=zsp400_run(&z->core,budget);
+        budget-=done;
+        if(z->core.fault || (z->core.c[15]&0x8000)) break;
+        if(!done) break;
     }
+    if(prof && ++calls%(unsigned)prof==0) dsp_prof_report();
     if(z->core.fault && !z->fault_reported) {
         fprintf(stderr,"[ZDSP] stopped fault=%d PC=%04x opcode/address=%04x after %llu instructions\n",z->core.fault,z->core.fault_pc,z->core.fault_op,(unsigned long long)z->core.instructions);
         z->fault_reported=1;
