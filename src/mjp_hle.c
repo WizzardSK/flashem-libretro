@@ -136,12 +136,20 @@ static void idct(const int in[64], uint8_t *out, int stride) {
         init = 1;
     }
     float tmp[64];
-    for (int y = 0; y < 8; y++)
+    for (int y = 0; y < 8; y++) {
+        const int *r = in + y * 8;
+        /* most rows of a movie block are zero or DC only */
+        if (!(r[1] | r[2] | r[3] | r[4] | r[5] | r[6] | r[7])) {
+            float d = c[0][0] * r[0];
+            for (int x = 0; x < 8; x++) tmp[y * 8 + x] = d;
+            continue;
+        }
         for (int x = 0; x < 8; x++) {
             float s = 0;
-            for (int u = 0; u < 8; u++) s += c[x][u] * in[y * 8 + u];
+            for (int u = 0; u < 8; u++) s += c[x][u] * r[u];
             tmp[y * 8 + x] = s;
         }
+    }
     for (int x = 0; x < 8; x++)
         for (int y = 0; y < 8; y++) {
             float s = 0;
