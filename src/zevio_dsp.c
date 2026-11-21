@@ -184,6 +184,15 @@ static void dsp_prof_report(void) {
         if(best) fprintf(stderr,"[DSPPROF] %04x %u\n",at,best);
     }
     fprintf(stderr,"[DSPPROF] steps %llu slept %llu\n",(unsigned long long)prof_steps,(unsigned long long)prof_sleep);
+    /* VFLASH_DSPPROF_FILE=<path>: the whole histogram appended there, one
+     * "pc count" line per address that ran, a blank line per report */
+    if(getenv("VFLASH_DSPPROF_FILE")) {
+        FILE *f=fopen(getenv("VFLASH_DSPPROF_FILE"),"a");
+        if(f) {
+            for(unsigned i=0;i<0x10000;i++) if(prof_pc[i]) fprintf(f,"%04x %u\n",i,prof_pc[i]);
+            fputc('\n',f); fclose(f);
+        }
+    }
     memset(prof_pc,0,sizeof prof_pc); prof_sleep=prof_steps=0;
 }
 void zevio_dsp_run(ZevioDSP *z,uint64_t budget) {
