@@ -582,6 +582,10 @@ static inline uint32_t filtered(GE *g, float fu, float fv) {
     fu -= 0.5f; fv -= 0.5f;
     int iu = ifloor(fu), iv = ifloor(fv);
     float du = fu - (float)iu, dv = fv - (float)iv;
+    /* on a texel centre (a 2D layer drawn 1:1) the filter gives that texel:
+     * one lookup instead of four and the weighting (Bratz's full-screen
+     * layers, #7) */
+    if (du < 1.0f / 256 && dv < 1.0f / 256) return TEXEL(g, iu, iv);
     uint32_t c[4];
     if (tc.ok) tquad(iu, iv, c);
     else {
@@ -647,6 +651,10 @@ static void raster(GE *g, V3 a, V3 b, V3 c) {
      * linear in px with slopes -(c.y - b.y) / area and -(a.y - c.y) / area */
     float s0 = -(c.y - b.y) * rarea, s1 = -(a.y - c.y) * rarea;
     int ztest = zenable && !g->nodepth;
+    /* All three corners at one depth (2D layers, sprites drawn as triangles):
+     * z is constant, so the per-pixel division goes (#7) */
+    int flat = ra == rb && rb == rc;
+    float zflat = 1.0f / ra;
     for (int y = y0; y <= y1; y++) {
         float py_ = (float)y + 0.5f;
         /* the span where w0, w1, w2 >= 0 on this row (one pixel of slack each
@@ -672,11 +680,12 @@ static void raster(GE *g, V3 a, V3 b, V3 c) {
         }
         for (int x = xs; x <= xe; x++) {
             float px_ = (float)x + 0.5f;
-            float w0 = edge(b.x, b.y, c.x, c.y, px_, py_) * rarea;
-            float w1 = edge(c.x, c.y, a.x, a.y, px_, py_) * rarea;
+            /* the edge functions are linear in px: w = s * px + w at 0 */
+            float w0 = s0 * px_ + w0x;
+            float w1 = s1 * px_ + w1x;
             float w2 = 1.0f - w0 - w1;
             if (w0 < 0 || w1 < 0 || w2 < 0) continue;
-            float z = 1.0f / (w0 * ra + w1 * rb + w2 * rc);
+            float z = flat ? zflat : 1.0f / (w0 * ra + w1 * rb + w2 * rc);
             float *zp = &zbuf[y * 1024 + x];
             if (ztest && z >= *zp) continue;
             uint32_t col;
