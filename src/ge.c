@@ -158,17 +158,18 @@ static void fill(GE *g, int x0, int y0, int w, int h, uint16_t c) {
 
 /* A texel of the current texture as a BGR555 colour; returns 0 for a
  * transparent one, else colour | 0x10000. Transparent is bit 15 set (as for
- * the video engine's palette) or 0x0000: Dingo Rallye's menu icons sit in
- * 0xFFFF, its banner's outside is index 0 = 0x968D, while other palettes
- * hold real colours at index 0. A texture is a
+ * the video engine's palette): Dingo Rallye's menu icons sit in 0xFFFF, its
+ * banner's outside is index 0 = 0x968D, while other palettes hold real
+ * colours at index 0. 0x0000 is opaque black: Bratz Fashion Pixiez's title
+ * "The Secret Necklace" is drawn in it, and came out dotted (#7). A texture is a
  * region of the (tiled) surface itself, from the 0x87 position: 16 bpp
  * texels are surface pixels, 8 bpp pack two and 4 bpp four to a pixel (low
  * bits first) - so a 512-wide 8 bpp texture spans 256 surface pixels. Its
  * size is 0x86 bits 2-0 / 5-3 (log2(size / 8)); coordinates wrap. The
  * palette is a row of surface pixels at the last 0x8F-0x94 position. */
-/* A BGR555 texel: 0 and bit 15 are transparent. */
+/* A BGR555 texel: bit 15 is transparent. */
 static uint32_t c555(uint16_t p) {
-    return p && !(p & 0x8000) ? p | 0x100000u : 0;
+    return !(p & 0x8000) ? p | 0x100000u : 0;
 }
 
 /* Destination alpha. Every sprite / triangle pixel leaves the alpha of what it
