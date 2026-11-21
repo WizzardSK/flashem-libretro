@@ -18,7 +18,7 @@ void zevio_dsp_reset(ZevioDSP *z) {
 void zevio_dsp_init(ZevioDSP *z, uint8_t *ram, uint32_t base, uint32_t size) {
     memset(z, 0, sizeof *z);
     z->ram = ram; z->ram_base = base; z->ram_size = size;
-    z->trace = getenv("VFLASH_DSPTRACE") != NULL;
+    z->trace = getenv("VFLASH_DSPTRACE") ? atoi(getenv("VFLASH_DSPTRACE")) : 0;
     z->core.ctx=z; z->core.read=core_read; z->core.write=core_write;
     z->core.iram=z->p; z->core.dram=z->d;
     zevio_dsp_reset(z);
@@ -110,6 +110,23 @@ static uint8_t *core_memory(ZevioDSP *z, uint16_t a, int program) {
     uint32_t base=program ? (packed<<1)&0xfffe0000u : (packed&0x7fff)<<17;
     return bus(z,base+2u*a,2);
 }
+/* VFLASH_DSPWIN=n (debugging): the first n DSP accesses through the window
+ * into the ARM's memory (core_memory's bus() case), and every one to the
+ * mailbox registers */
+static long win_left = -1;
+static void win_log(ZevioDSP *z, uint16_t a, int program, int w, uint16_t v) {
+    if (win_left < 0) win_left = getenv("VFLASH_DSPWIN") ? atol(getenv("VFLASH_DSPWIN")) : 0;
+    if (!win_left) return;
+    win_left--;
+    uint32_t packed=z->control[0x24/4];
+    uint32_t base=program ? (packed<<1)&0xfffe0000u : (packed&0x7fff)<<17;
+    fprintf(stderr,"[ZWIN] PC=%04x %s %c %04x (ARM %08x) %04x\n",z->core.pc,program?"P":"D",w?'W':'R',a,base+2u*a,v);
+}
+static int in_sram(ZevioDSP *z, uint16_t a, int program) {
+    uint16_t mode=z->core.c[15];
+    if(program) return a<0x4000 && (!(mode&2)||(mode&0x400));
+    return a<0xa000 && !(mode&1);
+}
 static uint16_t core_read(void *ctx,uint16_t a,int program) {
     ZevioDSP *z=ctx;
     if(!program && a>=0xfd00 && a<0xfd80) {
@@ -120,9 +137,11 @@ static uint16_t core_read(void *ctx,uint16_t a,int program) {
      * mirror: FC8A ready on DSP corresponds to ARM 900A0114. */
     if(!program && a>=0xfc80 && a<=0xfc8d) {
         unsigned o=0x100+(a-0xfc80)*2;
+        if(z->trace>1) fprintf(stderr,"[ZDSP] DSP PC=%04x reads peripheral[%04x]=%04x\n",z->core.pc,a,(uint16_t)(z->control[o/4] >> ((o&2)*8)));
         return z->control[o/4] >> ((o&2)*8);
     }
     uint8_t *p=core_memory(z,a,program);
+    if(p && !in_sram(z,a,program)) win_log(z,a,program,0,(uint16_t)(p[0]|p[1]<<8));
     if(p) return p[0]|p[1]<<8;
     z->core.fault=2; z->core.fault_pc=z->core.pc; z->core.fault_op=a;
     return 0;
@@ -148,6 +167,7 @@ static void core_write(void *ctx,uint16_t a,uint16_t v,int program) {
         return;
     }
     uint8_t *p=core_memory(z,a,program);
+    if(p && !in_sram(z,a,program)) win_log(z,a,program,1,v);
     if(p) { p[0]=v; p[1]=v>>8; return; }
     z->core.fault=3; z->core.fault_pc=z->core.pc; z->core.fault_op=a;
 }
