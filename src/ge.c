@@ -594,16 +594,19 @@ static inline uint32_t filtered(GE *g, float fu, float fv) {
     }
     if (!c[0] || !c[1] || !c[2] || !c[3])
         return c[(du >= 0.5f) + 2 * (dv >= 0.5f)];
-    float wt[4] = { (1 - du) * (1 - dv), du * (1 - dv), (1 - du) * dv, du * dv };
+    /* weights in 8.8 fixed point (they sum to 65536): the float version was
+     * most of the time of Bratz's full-screen layers (#7) */
+    int fu8 = (int)(du * 256.0f), fv8 = (int)(dv * 256.0f);
+    int wt[4] = { (256 - fu8) * (256 - fv8), fu8 * (256 - fv8), (256 - fu8) * fv8, fu8 * fv8 };
     uint32_t out = 0;
-    float al = 0;
     for (int k = 0; k < 3; k++) {
-        float acc = 0;
-        for (int i = 0; i < 4; i++) acc += wt[i] * (float)(c[i] >> (5 * k) & 31);
-        out |= (uint32_t)(acc + 0.5f) << (5 * k);
+        int acc = 0;
+        for (int i = 0; i < 4; i++) acc += wt[i] * (int)(c[i] >> (5 * k) & 31);
+        out |= (uint32_t)((acc + 32768) >> 16) << (5 * k);
     }
-    for (int i = 0; i < 4; i++) al += wt[i] * (float)(c[i] >> 16 & 31);
-    return out | (uint32_t)(al + 0.5f) << 16;
+    int al = 0;
+    for (int i = 0; i < 4; i++) al += wt[i] * (int)(c[i] >> 16 & 31);
+    return out | (uint32_t)((al + 32768) >> 16) << 16;
 }
 
 static float edge(float ax, float ay, float bx, float by, float cx, float cy) {
@@ -653,7 +656,10 @@ static void raster(GE *g, V3 a, V3 b, V3 c) {
     int ztest = zenable && !g->nodepth;
     /* All three corners at one depth (2D layers, sprites drawn as triangles):
      * z is constant, so the per-pixel division goes (#7) */
-    int flat = ra == rb && rb == rc;
+    float rmax = fmaxf(ra, fmaxf(rb, rc)), rmin = fminf(ra, fminf(rb, rc));
+    int flat = rmax - rmin <= 1e-5f * fabsf(rmax);
+    /* nothing per pixel needs z: no texture, light, fog or depth */
+    int noz = !g->tex_bpp && !lit && !fog && !ztest && !zenable;
     float zflat = 1.0f / ra;
     for (int y = y0; y <= y1; y++) {
         float py_ = (float)y + 0.5f;
@@ -685,7 +691,7 @@ static void raster(GE *g, V3 a, V3 b, V3 c) {
             float w1 = s1 * px_ + w1x;
             float w2 = 1.0f - w0 - w1;
             if (w0 < 0 || w1 < 0 || w2 < 0) continue;
-            float z = flat ? zflat : 1.0f / (w0 * ra + w1 * rb + w2 * rc);
+            float z = flat || noz ? zflat : 1.0f / (w0 * ra + w1 * rb + w2 * rc);
             float *zp = &zbuf[y * 1024 + x];
             if (ztest && z >= *zp) continue;
             uint32_t col;
