@@ -9,6 +9,7 @@ LOCAL_SRC_FILES := \
 	$(CORE_DIR)/src/vflash.c \
 	$(CORE_DIR)/src/hw.c \
 	$(CORE_DIR)/src/zevio_dsp.c \
+	$(CORE_DIR)/src/mjp_hle.c \
 	$(CORE_DIR)/src/zsp400.c \
 	$(CORE_DIR)/src/midi.c \
 	$(CORE_DIR)/src/cdda_dma.c \

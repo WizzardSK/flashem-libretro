@@ -2632,6 +2632,7 @@ void hw_destroy(HW *hw) {
 
 /* Turn CPU cycles into timer-clock ticks, carrying the remainder. */
 static void timers_run(HW *hw, uint64_t cycles) {
+    hw->zsp.cpu_hz = hw->cpu_hz;
     zevio_dsp_run(&hw->zsp, cycles);
     int_set(hw,17,(hw->zsp.control[0x118/4]&1) && (hw->zsp.control[0x104/4]&1));
     int_set(hw,18,(hw->zsp.control[0x118/4]&2) && (hw->zsp.control[0x110/4]&1));
