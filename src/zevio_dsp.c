@@ -94,13 +94,16 @@ static int hle_log(void) {
     if (on < 0) on = getenv("VFLASH_HLELOG") != NULL;
     return on;
 }
-/* The MIAV player: its decoder's entry points, as loaded by the ARM */
+/* The MIAV player, by its MCU row decoder at 0x0D00 (calls its entropy
+ * decoder at 0x0938 and then its IDCT, packs pixel pairs at 0x0D5D). Builds
+ * differ elsewhere: Bratz's IDCT is at 0x15DC, SpongeBob's at 0x15CC. */
 static int is_mjp_player(const ZevioDSP *z) {
-    static const struct { uint16_t at, w; } sig[] = {
-        { 0x0d00, 0x2694 }, { 0x0d32, 0x1e03 }, { 0x0d3e, 0x144f }, { 0x0d5d, 0x795f },
+    static const struct { uint16_t at, w, mask; } sig[] = {
+        { 0x0d00, 0x2694, 0xffff }, { 0x0d32, 0x1e03, 0xffff },
+        { 0x0d3e, 0x1000, 0xf000 }, { 0x0d5d, 0x795f, 0xffff },
     };
     for (unsigned i = 0; i < sizeof sig / sizeof sig[0]; i++)
-        if ((z->p[2u * sig[i].at] | z->p[2u * sig[i].at + 1] << 8) != sig[i].w) return 0;
+        if (((z->p[2u * sig[i].at] | z->p[2u * sig[i].at + 1] << 8) & sig[i].mask) != sig[i].w) return 0;
     return 1;
 }
 static uint32_t hle_mbox(ZevioDSP *z) {
