@@ -85,7 +85,15 @@ static int sprd = -1;
 static uint32_t blend, blend_k = 0xFFFFFF;
 
 /* Write a texel/colour: c = BGR555 | alpha << 16, alpha 1-16 (16 = opaque). */
-static uint16_t blend_px(uint16_t dst, uint32_t c) {
+static uint16_t blend_mix(uint16_t dst, uint32_t c);
+/* the opaque case inline, the mix out of line: every sprite and triangle
+ * pixel comes here (#7) */
+static inline uint16_t blend_px(uint16_t dst, uint32_t c) {
+    int al = (int)(c >> 16 & 31);
+    if ((al >= 16 || al == 0) && ((blend & 3) != 2 || blend_k == 0xFFFFFF)) return (uint16_t)c;
+    return blend_mix(dst, c);
+}
+static uint16_t blend_mix(uint16_t dst, uint32_t c) {
     int al = (int)(c >> 16 & 31);
     if (al == 0 || al > 16) al = 16;
     int on = (blend & 3) == 2;
