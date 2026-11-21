@@ -222,6 +222,15 @@ static void hle_frame(ZevioDSP *z) {
                 if (py) memcpy(py, y, (size_t)w * h);
                 if (pu) memcpy(pu, u, (size_t)w * h / 4);
                 if (pv) memcpy(pv, v, (size_t)w * h / 4);
+                /* VFLASH_HLEDUMP=<frame>,<file>: that frame's planes, for tests */
+                const char *dump = getenv("VFLASH_HLEDUMP");
+                if (dump && (uint32_t)atoi(dump) == m->frame + 1 && strchr(dump, ',')) {
+                    FILE *f = fopen(strchr(dump, ',') + 1, "wb");
+                    if (f) {
+                        fwrite(y, 1, (size_t)w * h, f); fwrite(u, 1, (size_t)w * h / 4, f);
+                        fwrite(v, 1, (size_t)w * h / 4, f); fclose(f);
+                    }
+                }
             } else if (hle_log()) {
                 fprintf(stderr, "[ZHLE] frame %u: decode error %d\n", m->frame + 1, r);
             }
