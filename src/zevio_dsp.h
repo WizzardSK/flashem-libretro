@@ -4,6 +4,19 @@
 
 /* DSP transfer bus is distinct from the ARM bus: DC000000 is DSP data
  * memory here, but the interrupt controller on the ARM side. */
+/* The movie player's high-level emulation (zevio_dsp.c, #7): the state of
+ * the MIAV stream and the frame events while the DSP core stays stopped */
+typedef struct {
+    int      active, playing, waiting_ack, skip_next, cmd_pending;
+    uint32_t ring_base, ring_size, rd, consumed_chunk;
+    uint32_t ybuf, ubuf, vbuf;
+    uint32_t a1_base, a2_base, a_size, a1_wr, a2_wr;
+    uint32_t frames_total, frame, fps, w, h;
+    uint64_t clock, next_at;
+    uint32_t hdr_len;
+    uint8_t  hdr[2048];
+} MjpPlay;
+
 typedef struct {
     uint8_t p[0x20000], d[0x20000];
     uint8_t *ram;
@@ -13,6 +26,8 @@ typedef struct {
     int trace;
     ZSP400 core;
     int running, fault_reported;
+    uint32_t cpu_hz;   /* the ARM clock the run budgets count, for the HLE's pace */
+    MjpPlay play;
 } ZevioDSP;
 
 void zevio_dsp_init(ZevioDSP *z, uint8_t *ram, uint32_t base, uint32_t size);

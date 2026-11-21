@@ -2632,6 +2632,7 @@ void hw_destroy(HW *hw) {
 
 /* Turn CPU cycles into timer-clock ticks, carrying the remainder. */
 static void timers_run(HW *hw, uint64_t cycles) {
+    hw->zsp.cpu_hz = hw->cpu_hz;
     zevio_dsp_run(&hw->zsp, cycles);
     int_set(hw,17,(hw->zsp.control[0x118/4]&1) && (hw->zsp.control[0x104/4]&1));
     int_set(hw,18,(hw->zsp.control[0x118/4]&2) && (hw->zsp.control[0x110/4]&1));
@@ -2805,6 +2806,26 @@ static void exit_hook(HW *hw) {
 
 void hw_run_frame(HW *hw) {
     ARM9 *c = hw->cpu;
+    /* VFLASH_DSPDUMP=<frame>,<prefix> (debugging): the DSP's program and data
+     * SRAM, registers and DMA/control blocks, to <prefix>p.bin, d.bin, regs.bin */
+    if (getenv("VFLASH_DSPDUMP")) {
+        char *e; unsigned long long at = strtoull(getenv("VFLASH_DSPDUMP"), &e, 10);
+        if (hw->frame == at && *e == ',') {
+            char path[600]; FILE *f;
+            snprintf(path, sizeof path, "%sp.bin", e + 1);
+            if ((f = fopen(path, "wb"))) { fwrite(hw->zsp.p, 1, sizeof hw->zsp.p, f); fclose(f); }
+            snprintf(path, sizeof path, "%sd.bin", e + 1);
+            if ((f = fopen(path, "wb"))) { fwrite(hw->zsp.d, 1, sizeof hw->zsp.d, f); fclose(f); }
+            snprintf(path, sizeof path, "%sregs.bin", e + 1);
+            if ((f = fopen(path, "wb"))) {
+                fwrite(&hw->zsp.core, 1, sizeof hw->zsp.core, f);
+                fwrite(hw->zsp.dma, 1, sizeof hw->zsp.dma, f);
+                fwrite(hw->zsp.control, 1, sizeof hw->zsp.control, f);
+                fclose(f);
+            }
+            fprintf(stderr, "[ZDSP] dumped at frame %llu to %s*\n", at, e + 1);
+        }
+    }
     exit_hook(hw);
     for (int u = 0; u < 2; u++)
         if (uart_link(u) >= 0) { uart_link_poll(hw, u); uart_int_check(hw, u); }
