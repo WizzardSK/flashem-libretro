@@ -78,6 +78,7 @@ fault:
  *     0x80 init: reply +40 0x8080, +48 0x7000
  *     0x81 play: ring start, end, window base, 0xA000, Y, U, V, audio ring 1,
  *          ring 2, ring size; reply 0x8081, +48 width, height, fps, flag, frames
+ *     0x82 stop
  *   per frame: message at +80 (0x92, flags, audio end pointer, audio bytes,
  *   audio wrap, frame number, input chunk flag, frame size, consumed ring
  *   pointer, ...), +104 bit 0 (ARM IRQ 17); the ARM clears it after writing
@@ -163,6 +164,11 @@ static void hle_command(ZevioDSP *z) {
         wr32(z, mb + 0x54, flag); wr32(z, mb + 0x58, m->frames_total);
         if (hle_log()) fprintf(stderr, "[ZHLE] play %ux%u %u fps %u frames, ring %08x+%x, audio %08x/%08x+%x\n",
                                m->w, m->h, m->fps, m->frames_total, m->ring_base, m->ring_size, m->a1_base, m->a2_base, m->a_size);
+    } else if (cmd == 0x82) {
+        /* stop: the ARM sends it after the last frame (Bratz's intro) */
+        wr32(z, mb + 0x40, 0x8082);
+        m->playing = 0;
+        m->waiting_ack = 0;
     } else {
         fprintf(stderr, "[ZHLE] unknown command %x: stopping\n", cmd);
         m->playing = 0;
