@@ -85,7 +85,15 @@ static int sprd = -1;
 static uint32_t blend, blend_k = 0xFFFFFF;
 
 /* Write a texel/colour: c = BGR555 | alpha << 16, alpha 1-16 (16 = opaque). */
-static uint16_t blend_px(uint16_t dst, uint32_t c) {
+static uint16_t blend_mix(uint16_t dst, uint32_t c);
+/* the opaque case inline, the mix out of line: every sprite and triangle
+ * pixel comes here (#7) */
+static inline uint16_t blend_px(uint16_t dst, uint32_t c) {
+    int al = (int)(c >> 16 & 31);
+    if ((al >= 16 || al == 0) && ((blend & 3) != 2 || blend_k == 0xFFFFFF)) return (uint16_t)c;
+    return blend_mix(dst, c);
+}
+static uint16_t blend_mix(uint16_t dst, uint32_t c) {
     int al = (int)(c >> 16 & 31);
     if (al == 0 || al > 16) al = 16;
     int on = (blend & 3) == 2;
@@ -582,6 +590,10 @@ static inline uint32_t filtered(GE *g, float fu, float fv) {
     fu -= 0.5f; fv -= 0.5f;
     int iu = ifloor(fu), iv = ifloor(fv);
     float du = fu - (float)iu, dv = fv - (float)iv;
+    /* on a texel centre (a 2D layer drawn 1:1) the filter gives that texel:
+     * one lookup instead of four and the weighting (Bratz's full-screen
+     * layers, #7) */
+    if (du < 1.0f / 256 && dv < 1.0f / 256) return TEXEL(g, iu, iv);
     uint32_t c[4];
     if (tc.ok) tquad(iu, iv, c);
     else {
@@ -590,16 +602,19 @@ static inline uint32_t filtered(GE *g, float fu, float fv) {
     }
     if (!c[0] || !c[1] || !c[2] || !c[3])
         return c[(du >= 0.5f) + 2 * (dv >= 0.5f)];
-    float wt[4] = { (1 - du) * (1 - dv), du * (1 - dv), (1 - du) * dv, du * dv };
+    /* weights in 8.8 fixed point (they sum to 65536): the float version was
+     * most of the time of Bratz's full-screen layers (#7) */
+    int fu8 = (int)(du * 256.0f), fv8 = (int)(dv * 256.0f);
+    int wt[4] = { (256 - fu8) * (256 - fv8), fu8 * (256 - fv8), (256 - fu8) * fv8, fu8 * fv8 };
     uint32_t out = 0;
-    float al = 0;
     for (int k = 0; k < 3; k++) {
-        float acc = 0;
-        for (int i = 0; i < 4; i++) acc += wt[i] * (float)(c[i] >> (5 * k) & 31);
-        out |= (uint32_t)(acc + 0.5f) << (5 * k);
+        int acc = 0;
+        for (int i = 0; i < 4; i++) acc += wt[i] * (int)(c[i] >> (5 * k) & 31);
+        out |= (uint32_t)((acc + 32768) >> 16) << (5 * k);
     }
-    for (int i = 0; i < 4; i++) al += wt[i] * (float)(c[i] >> 16 & 31);
-    return out | (uint32_t)(al + 0.5f) << 16;
+    int al = 0;
+    for (int i = 0; i < 4; i++) al += wt[i] * (int)(c[i] >> 16 & 31);
+    return out | (uint32_t)((al + 32768) >> 16) << 16;
 }
 
 static float edge(float ax, float ay, float bx, float by, float cx, float cy) {
@@ -647,6 +662,13 @@ static void raster(GE *g, V3 a, V3 b, V3 c) {
      * linear in px with slopes -(c.y - b.y) / area and -(a.y - c.y) / area */
     float s0 = -(c.y - b.y) * rarea, s1 = -(a.y - c.y) * rarea;
     int ztest = zenable && !g->nodepth;
+    /* All three corners at one depth (2D layers, sprites drawn as triangles):
+     * z is constant, so the per-pixel division goes (#7) */
+    float rmax = fmaxf(ra, fmaxf(rb, rc)), rmin = fminf(ra, fminf(rb, rc));
+    int flat = rmax - rmin <= 1e-5f * fabsf(rmax);
+    /* nothing per pixel needs z: no texture, light, fog or depth */
+    int noz = !g->tex_bpp && !lit && !fog && !ztest && !zenable;
+    float zflat = 1.0f / ra;
     for (int y = y0; y <= y1; y++) {
         float py_ = (float)y + 0.5f;
         /* the span where w0, w1, w2 >= 0 on this row (one pixel of slack each
@@ -672,11 +694,12 @@ static void raster(GE *g, V3 a, V3 b, V3 c) {
         }
         for (int x = xs; x <= xe; x++) {
             float px_ = (float)x + 0.5f;
-            float w0 = edge(b.x, b.y, c.x, c.y, px_, py_) * rarea;
-            float w1 = edge(c.x, c.y, a.x, a.y, px_, py_) * rarea;
+            /* the edge functions are linear in px: w = s * px + w at 0 */
+            float w0 = s0 * px_ + w0x;
+            float w1 = s1 * px_ + w1x;
             float w2 = 1.0f - w0 - w1;
             if (w0 < 0 || w1 < 0 || w2 < 0) continue;
-            float z = 1.0f / (w0 * ra + w1 * rb + w2 * rc);
+            float z = flat || noz ? zflat : 1.0f / (w0 * ra + w1 * rb + w2 * rc);
             float *zp = &zbuf[y * 1024 + x];
             if (ztest && z >= *zp) continue;
             uint32_t col;
