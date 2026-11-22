@@ -636,9 +636,15 @@ static float edge(float ax, float ay, float bx, float by, float cx, float cy) {
 static void raster(GE *g, V3 a, V3 b, V3 c) {
     if (!a.ok || !b.ok || !c.ok || g->no3d) return;
     float area = edge(a.x, a.y, b.x, b.y, c.x, c.y);
+    /* Back faces: with 0x1C bit 6 set, a triangle facing away (clockwise on
+     * the screen, area > 0 here) is not drawn. Bratz Fashion Pixiez's Bratz
+     * World puts the camera inside a hollow tree trunk; drawn from inside,
+     * the trunk covered the whole menu in brown bark (#8). SpongeBob and
+     * Spider-Man look the same with it. VFLASH_CULL=0 draws every face,
+     * 1 culls the other winding, 0x<bit>2 tests another bit of 0x1C. */
     {
         static int cull = -1;
-        if (cull < 0) cull = getenv("VFLASH_CULL") ? atoi(getenv("VFLASH_CULL")) : 0;
+        if (cull < 0) cull = getenv("VFLASH_CULL") ? atoi(getenv("VFLASH_CULL")) : 2;
         if (cull && (reg1c & (1u << (cull >> 4 ? cull >> 4 : 6)))) {
             if ((cull & 15) == 1 && area < 0) return;
             if ((cull & 15) == 2 && area > 0) return;
@@ -1027,9 +1033,10 @@ static void run(GE *g, uint32_t pc, uint32_t end, int depth) {
         /* 0x1C: render mode, default 0x006760. Bits 15-23 a per-object counter
          * (Cars / Bratz / SpongeBob world models, with 1E bit 2 = 0xE234), low bits
          * flags: bit 3 with that counter, bit 6 clear on SpongeBob's blender glass,
-         * bits 6+9 clear on Dingo's title sky. Bit 6 is not plain backface culling
-         * (VFLASH_CULL tried it: it deleted Spider-Man's and Dingo's skies, drawn
-         * under 0x6760). No effect modelled yet. */
+         * bits 6+9 clear on Dingo's title sky. Bit 6 = back faces culled (raster();
+         * tried in September before the strips had a consistent winding, it then
+         * deleted Spider-Man's and Dingo's skies - Spider-Man's is whole now, Dingo
+         * not rechecked). */
         case 0x1C: reg1c = w & 0xFFFFFF; break;
         /* 0x10000000 a: once a frame, alone in a list after the depth clear, with a
          * RAM address (Spider-Man 0x10B40128: zeroed at boot, never read by the CPU)

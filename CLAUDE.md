@@ -120,8 +120,11 @@ audit's open items (transparency, Cars' white screens, Bratz desync, race ground
   by the CPU (readback/fence). Was executed as a command ("unknown op 10" at 10Bxxxxx).
 - 0x1C render mode (default 006760): bits 15-23 a per-object counter on world models
   (with 1E bit 2), bit 3 with it, bit 6 clear on SpongeBob's blender glass, bits 6+9 clear
-  on Dingo's title sky. Not culling (VFLASH_CULL=2 tried: deletes skies drawn under 6760);
-  stored, no effect. Strips now pass alternate triangles in consistent winding.
+  on Dingo's title sky. Bit 6 = back-face culling, on by default since 22.11.2026 (#8):
+  Bratz World's camera sits inside a hollow tree trunk, whose inner faces covered the menu.
+  Tried in September (VFLASH_CULL=2) it deleted skies drawn under 6760, but that was before
+  strips passed alternate triangles in consistent winding; SpongeBob and Spider-Man (city
+  sky, sea) are unchanged now, Dingo Rallye not rechecked. VFLASH_CULL=0 turns it off.
 - A list whose PC leaves RAM ends (Bratz's particle lists end 0x08 a 0).
 - Blending: 0x88 m = 2 turns it on, 0x8D kkkkkk = factor per channel (Cars fades its logos
   with a white full-screen sprite under 8D000000..FFFFFF); texture alpha applies on top.
