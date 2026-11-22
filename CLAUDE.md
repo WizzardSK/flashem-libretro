@@ -111,8 +111,11 @@ audit's open items (transparency, Cars' white screens, Bratz desync, race ground
   a word, rows) - the inverse of D0/0E. Bratz renders a 128x128 sprite off-screen, D1s it
   to 0x10E39A2C, then D0/0E uploads it from there: render-to-texture through RAM; 0x89
   alone follows (texture-cache sync, no effect).
-- D2000003 src y|x, h|w, dst y|x: copy a surface rectangle. Bratz rotates a 512-wide
-  strip at row 992 with two a frame (a scrolling texture).
+- D2000003 dst y|x, h|w, src y|x: copy a surface rectangle (destination FIRST). D6 has the
+  same words and keeps the destination where the source is transparent. Bratz's try-on
+  room builds a top's texture: D2 (0,2272) <- (0,1504) (the chosen colour swatch), then
+  D6 (192,2272) <- (576,2400) 128x64 (skin). Read source-first, D2 put the "Dummy
+  texture" placeholder over the swatch: every top was mint (#7). VFLASH_D2=0 = old order.
 - 0x10000000 a: two words, once a frame after the depth clear, a = RAM address never read
   by the CPU (readback/fence). Was executed as a command ("unknown op 10" at 10Bxxxxx).
 - 0x1C render mode (default 006760): bits 15-23 a per-object counter on world models
