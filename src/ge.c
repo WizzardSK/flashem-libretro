@@ -674,6 +674,11 @@ static void raster(GE *g, V3 a, V3 b, V3 c) {
      * linear in px with slopes -(c.y - b.y) / area and -(a.y - c.y) / area */
     float s0 = -(c.y - b.y) * rarea, s1 = -(a.y - c.y) * rarea;
     int ztest = zenable && !g->nodepth;
+    /* Less-or-equal, as for sprites: Bratz draws its selected menu button twice
+     * over the same quad, a pale glow and then the "GAME ZONE" banner; a strict
+     * test dropped the banner and the button was blank (#7). VFLASH_ZLESS=1: strict. */
+    static int zless = -1;
+    if (zless < 0) zless = getenv("VFLASH_ZLESS") && atoi(getenv("VFLASH_ZLESS"));
     /* All three corners at one depth (2D layers, sprites drawn as triangles):
      * z is constant, so the per-pixel division goes (#7) */
     float rmax = fmaxf(ra, fmaxf(rb, rc)), rmin = fminf(ra, fminf(rb, rc));
@@ -713,7 +718,7 @@ static void raster(GE *g, V3 a, V3 b, V3 c) {
             if (w0 < 0 || w1 < 0 || w2 < 0) continue;
             float z = flat || noz ? zflat : 1.0f / (w0 * ra + w1 * rb + w2 * rc);
             float *zp = &zbuf[y * 1024 + x];
-            if (ztest && z >= *zp) continue;
+            if (ztest && (zless ? z >= *zp : z > *zp)) continue;
             uint32_t col;
             if (g->tex_bpp) {
                 col = filtered(g, (w0 * ua + w1 * ub + w2 * uc) * z, (w0 * va + w1 * vb + w2 * vc) * z);
@@ -981,19 +986,36 @@ static void run(GE *g, uint32_t pc, uint32_t end, int depth) {
             pc += 4 * (w & 0xFFFF);
             break;
         }
-        case 0xD2: { /* D2000003 src y<<16|x  h<<16|w  dst y<<16|x: copy a surface
+        case 0xD2:   /* D2000003 dst y<<16|x  h<<16|w  src y<<16|x: copy a surface
                       * rectangle. Bratz rotates a 512-wide strip at row 992 with two
                       * of these a frame (a scrolling texture). */
-            int sx = (int)(rd(g, pc) & 0xFFFF), sy = (int)(rd(g, pc) >> 16);
+        case 0xD6: { /* D6000003, the same words: copy, leaving the destination where
+                      * the source is transparent (bit 15).
+                      * Destination first: Bratz's try-on room builds a top's texture
+                      * at (0,2272) with D2 (0,2272) <- (0,1504), the chosen colour
+                      * (its colour swatches sit at 1504-2048), then D6 (192,2272)
+                      * <- (576,2400) 128x64, the character's skin. Read source first,
+                      * the D2 put the "Dummy texture" placeholder over the swatch and
+                      * every top came out mint (#7). VFLASH_D2=0: source first, no key. */
+            static int order = -1;
+            if (order < 0) order = !getenv("VFLASH_D2") || atoi(getenv("VFLASH_D2"));
+            uint32_t a = rd(g, pc), b = rd(g, pc + 8);
+            uint32_t s = order ? b : a, d = order ? a : b;
+            int sx = (int)(s & 0xFFFF), sy = (int)(s >> 16);
             int cw_ = (int)(rd(g, pc + 4) & 0xFFFF), ch = (int)(rd(g, pc + 4) >> 16);
-            int dx = (int)(rd(g, pc + 8) & 0xFFFF), dy = (int)(rd(g, pc + 8) >> 16);
+            int dx = (int)(d & 0xFFFF), dy = (int)(d >> 16);
+            int key = op == 0xD6 && order;
             static uint16_t tmp[1024 * 64];
-            if (cw_ > 0 && ch > 0 && cw_ * ch <= 1024 * 64) {
+            if (cw_ > 0 && ch > 0 && cw_ * ch <= 1024 * 64 && (op == 0xD2 || order)) {
                 for (int y = 0; y < ch; y++)
-                    for (int x = 0; x < cw_; x++) { uint16_t *s = px(g, sx + x, sy + y); tmp[y * cw_ + x] = s ? *s : 0; }
+                    for (int x = 0; x < cw_; x++) { uint16_t *q = px(g, sx + x, sy + y); tmp[y * cw_ + x] = q ? *q : 0x8000; }
                 for (int y = 0; y < ch; y++)
-                    for (int x = 0; x < cw_; x++) { uint16_t *d = px(g, dx + x, dy + y); if (d) *d = tmp[y * cw_ + x]; }
+                    for (int x = 0; x < cw_; x++) {
+                        uint16_t v = tmp[y * cw_ + x], *q = px(g, dx + x, dy + y);
+                        if (q && !(key && (v & 0x8000))) *q = v;
+                    }
             }
+            if (g->trace) printf("[GET]   %02X: (%d,%d) %dx%d <- (%d,%d)\n", op, dx, dy, cw_, ch, sx, sy);
             pc += 4 * (w & 0xFFFF);
             break;
         }
