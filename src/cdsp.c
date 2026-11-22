@@ -16,8 +16,18 @@
 #define PITCH       0.0016
 #define SLED_MM_S   20.0
 #define LEADOUT_SECTORS 6750      /* 90 s of lead-out after the last sector */
-/* Area swept per sector: v * pitch / 75 (v = 1.3 m/s). */
-#define K_SECTOR    (1300.0 * PITCH / 75.0 / M_PI)
+/* Area swept per sector: v * pitch / 75 (v = 1.3 m/s; VFLASH_CDCLV=<m/s>
+ * overrides it, for debugging the driver's seek arithmetic). */
+static double k_sector(void) {
+    static double k;
+    if (!k) {
+        const char *e = getenv("VFLASH_CDCLV");
+        double v = e && atof(e) > 0.5 && atof(e) < 2.0 ? atof(e) : 1.3;
+        k = v * 1000.0 * PITCH / 75.0 / M_PI;
+    }
+    return k;
+}
+#define K_SECTOR    (k_sector())
 
 /* VFLASH_CDLOG=<frame>: the machine turns this on from that frame. */
 int cdsp_log;
