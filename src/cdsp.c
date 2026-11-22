@@ -54,6 +54,16 @@ double cdsp_speed(CDSP *d) {
          * profiles; the complete CXD3059 extended clock map is unknown. */
         if ((d->clock_config & 0xC0) == 0x40) rate *= 2.0;
     }
+    /* VFLASH_CDSPEED=<factor> (debugging): scale the disc's rate, to try
+     * the servo driver's timing against a slower or faster spindle */
+    {
+        static double scale = -1;
+        if (scale < 0) {
+            const char *e = getenv("VFLASH_CDSPEED");
+            scale = e && atof(e) > 0 ? atof(e) : 1.0;
+        }
+        rate *= scale;
+    }
     return rate;
 }
 
