@@ -674,6 +674,11 @@ static void raster(GE *g, V3 a, V3 b, V3 c) {
      * linear in px with slopes -(c.y - b.y) / area and -(a.y - c.y) / area */
     float s0 = -(c.y - b.y) * rarea, s1 = -(a.y - c.y) * rarea;
     int ztest = zenable && !g->nodepth;
+    /* Less-or-equal, as for sprites: Bratz draws its selected menu button twice
+     * over the same quad, a pale glow and then the "GAME ZONE" banner; a strict
+     * test dropped the banner and the button was blank (#7). VFLASH_ZLESS=1: strict. */
+    static int zless = -1;
+    if (zless < 0) zless = getenv("VFLASH_ZLESS") && atoi(getenv("VFLASH_ZLESS"));
     /* All three corners at one depth (2D layers, sprites drawn as triangles):
      * z is constant, so the per-pixel division goes (#7) */
     float rmax = fmaxf(ra, fmaxf(rb, rc)), rmin = fminf(ra, fminf(rb, rc));
@@ -713,7 +718,7 @@ static void raster(GE *g, V3 a, V3 b, V3 c) {
             if (w0 < 0 || w1 < 0 || w2 < 0) continue;
             float z = flat || noz ? zflat : 1.0f / (w0 * ra + w1 * rb + w2 * rc);
             float *zp = &zbuf[y * 1024 + x];
-            if (ztest && z >= *zp) continue;
+            if (ztest && (zless ? z >= *zp : z > *zp)) continue;
             uint32_t col;
             if (g->tex_bpp) {
                 col = filtered(g, (w0 * ua + w1 * ub + w2 * uc) * z, (w0 * va + w1 * vb + w2 * vc) * z);
