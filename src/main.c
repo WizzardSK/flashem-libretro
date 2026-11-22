@@ -372,6 +372,28 @@ int main(int argc, char **argv) {
                             else                  dbg_resume();
                         }
                         break;
+                    case SDLK_F6:   /* save state, flashem.state beside the program */
+                    case SDLK_F8: { /* load it */
+                        if (dbg_mode || !vf) break;
+                        char path[4096];
+                        snprintf(path, sizeof path, "%sflashem.state", base_dir ? base_dir : "");
+                        size_t n = vflash_state_size(vf);
+                        void *b = malloc(n);
+                        int ok = 0;
+                        if (b && ev.key.keysym.sym == SDLK_F6) {
+                            FILE *f = vflash_state_save(vf, b, n) ? fopen(path, "wb") : NULL;
+                            ok = f && fwrite(b, 1, n, f) == n;
+                            if (f) fclose(f);
+                        } else if (b) {
+                            FILE *f = fopen(path, "rb");
+                            ok = f && fread(b, 1, n, f) == n && vflash_state_load(vf, b, n);
+                            if (f) fclose(f);
+                        }
+                        free(b);
+                        printf("[STATE] %s %s: %s\n", ev.key.keysym.sym == SDLK_F6 ? "save" : "load",
+                               path, ok ? "ok" : "FAILED");
+                        break;
+                    }
                 }
             }
         }
