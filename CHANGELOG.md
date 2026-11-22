@@ -4,7 +4,7 @@ What changed in FlashEm, newest first. Releases are builds of the libretro core 
 
 ## November 2026
 
-- The standalone emulator saves a state with F6 and loads it with F8 (`flashem.state` beside the program), so a tester can send the moment a bug happens (#8).
+- The standalone emulator saves a state with F6 and loads it with F8 (`flashem.state` beside the program), so a tester can send the moment a bug happens (#8). Like the other hotkeys they can be rebound in `flashem.ini` (`save_state`, `load_state`): on some laptops F6 switches the touchpad off.
 - Back faces are culled when a model asks for it (0x1C bit 6): Bratz Fashion Pixiez's Bratz World puts its camera inside a hollow tree trunk, whose inner side covered the whole menu in brown bark (#8, TobiasAR). `VFLASH_CULL=0` draws every face.
 - Bratz Fashion Pixiez's tops in the try-on room have their colours again: the graphics engine's surface copies (D2, and D6, which skips transparent pixels) copy into their first rectangle, not out of it. The game builds a top's texture by copying the chosen colour into it and the skin over it; read the other way round, every top came out with the mint "Dummy texture" placeholder. The scrolling texture strip some screens rotate now moves too (#7, TobiasAR). `VFLASH_D2=0` restores the old order.
 - Triangles pass the depth test at equal depth, as sprites already did: Bratz's main menu draws the selected button twice over the same quad, a glow and then the banner with its text, and the banner was dropped, leaving the button blank (#7). `VFLASH_ZLESS=1` restores the strict test.

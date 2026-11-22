@@ -60,6 +60,8 @@ static const Action actions[] = {
     { "fullscreen", 0, HOTKEY_FULLSCREEN, "F11",    "" },
     { "screenshot", 0, HOTKEY_SCREENSHOT, "F5",     "" },
     { "open_disc",  0, HOTKEY_OPEN_DISC,  "O",      "" },
+    { "save_state", 0, HOTKEY_SAVE_STATE, "F6",     "" },
+    { "load_state", 0, HOTKEY_LOAD_STATE, "F8",     "" },
     { "quit",       0, HOTKEY_QUIT,       "Escape", "" },
 };
 #define NACTIONS (sizeof(actions) / sizeof(actions[0]))

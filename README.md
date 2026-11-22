@@ -225,7 +225,8 @@ X for red, Z for yellow, S for green, A for blue, and Enter.
 
 In the standalone emulator, Tab runs it unthrottled while held (turbo, without
 sound), O opens another disc, F5 saves `screenshot.bmp`, F6 saves the state to
-`flashem.state` beside the program and F8 loads it (only into the same build),
+`flashem.state` beside the program and F8 loads it (only into the same build;
+other keys: `save_state` / `load_state` in `flashem.ini`),
 F11 toggles fullscreen, and Esc quits. F2 pauses/resumes when started with `--dbg` or `--dbg-run`.
 Some game prompts require a colour button rather than Enter.
 

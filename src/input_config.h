@@ -12,6 +12,8 @@ enum {
     HOTKEY_SCREENSHOT = 1 << 2,
     HOTKEY_OPEN_DISC  = 1 << 3,
     HOTKEY_QUIT       = 1 << 4,
+    HOTKEY_SAVE_STATE = 1 << 5,  /* flashem.state beside the program */
+    HOTKEY_LOAD_STATE = 1 << 6,
 };
 
 /* Reads flashem.ini from dir (SDL_GetBasePath()), or writes it with the
