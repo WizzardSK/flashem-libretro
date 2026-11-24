@@ -284,7 +284,7 @@ jobs:
             echo
             echo "**Standalone** - \`flashem-<platform>\` (\`.tar.gz\`, \`.zip\` on Windows) is the emulator on its own, with SDL2. Put the boot ROM \`70004.bin\` beside \`flashem\` (\`flashem.exe\`) and start it: it asks for a disc (\`.cue\`, \`.bin\`, \`.iso\`), or takes one on the command line or dropped on its window; O opens another. Keys: arrows = stick, Z/X/C/V = red/yellow/green/blue, Enter = OK, Backspace = Exit, F11 = fullscreen, Esc = quit (\`flashem --help\` lists the rest). On Linux it needs SDL2 (\`libsdl2-2.0-0\` on Debian/Ubuntu) and, for the disc picker, zenity or kdialog."
             echo
-            echo "No save states: the emulator has no serialiser yet, so rewind, run-ahead and netplay are out until it grows one."
+            echo "Save states: in the libretro core, with rewind and run-ahead; in the standalone emulator F6 saves and F8 loads \`flashem.state\`, Shift+F6 and Shift+F8 pick the file. A state loads only into the build that made it."
             echo
             # What is new: the newest section of the changelog
             echo "**What's new**"
