@@ -54,7 +54,10 @@ playability across every title, revision, or game mode.
   interpolation, and sound interrupt generation remain incomplete.
 - Save states (with rewind and run-ahead) work in the libretro core; a state
   loads only into the same build of the core, and the memory card is not part
-  of it. The libretro core has no reset implementation,
+  of it. The memory card and the console's system flash, where games such as
+  Bratz Fashion Pixiez keep the player's profile, are kept in
+  `saves/flashem/` (`memcard.bin`, `sysflash.bin`). The libretro core has no
+  reset implementation,
   disk swapping, cheats, or persistent save-memory interface; its core
   options are Boot ROM, Console Language and CPU Emulation (JIT or Interpreter).
   Reload the content to restart it.
@@ -224,8 +227,11 @@ With RetroArch's default keyboard mapping of the RetroPad, that is: arrow keys,
 X for red, Z for yellow, S for green, A for blue, and Enter.
 
 In the standalone emulator, Tab runs it unthrottled while held (turbo, without
-sound), O opens another disc, F5 saves `screenshot.bmp`, F11 toggles fullscreen,
-and Esc quits. F2 pauses/resumes when started with `--dbg` or `--dbg-run`.
+sound), O opens another disc, F5 saves `screenshot.bmp`, F6 saves the state to
+`flashem.state` beside the program and F8 loads it (only into the same build;
+other keys: `save_state` / `load_state` in `flashem.ini`); with Shift held,
+Shift+F6 and Shift+F8 ask for the file in a file picker, so several states can be kept,
+F11 toggles fullscreen, and Esc quits. F2 pauses/resumes when started with `--dbg` or `--dbg-run`.
 Some game prompts require a colour button rather than Enter.
 
 The standalone emulator also takes gamepads (SDL GameController), laid out as the

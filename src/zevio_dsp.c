@@ -202,6 +202,10 @@ static void hle_frame(ZevioDSP *z) {
         }
         have_video = 1;
         size = len;
+        /* each chunk carries its frame's number: another one means the ring
+         * holds data the ARM has not refilled yet (or refilled ahead) */
+        if (hle_log() && le32(ch + 4) != m->frame)
+            fprintf(stderr, "[ZHLE] frame %u: ring +%x holds frame %u\n", m->frame, (m->rd + m->ring_size - 12 - len) % m->ring_size, le32(ch + 4));
         for (uint32_t i = 0; i + 1 < len; i += 2) { uint8_t t = buf[i]; buf[i] = buf[i + 1]; buf[i + 1] = t; }
         uint32_t off = 0;
         if (!m->hdr_len && len > 4 && buf[0] == 0xFF && buf[1] == 0xD8) {

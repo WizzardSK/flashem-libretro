@@ -51,6 +51,8 @@ ifneq (,$(findstring unix,$(platform)))
 	TARGET := $(TARGET_NAME)_libretro.so
 	fpic := -fPIC
 	SHARED := -shared $(LINK_VERSION_SCRIPT)
+	# the rasteriser's helper threads (ge.c)
+	LIBS += -pthread
 	ifneq (,$(findstring Haiku,$(shell uname -s)))
 		LIBS :=
 	endif

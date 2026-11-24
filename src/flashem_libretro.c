@@ -300,6 +300,7 @@ void retro_run(void)
 }
 
 static char s_memcard_path[1100];
+static char s_sysflash_path[1100];
 
 /* mkdir -p for the one level the card needs */
 static void path_mkdir(const char *dir)
@@ -387,16 +388,34 @@ bool retro_load_game(const struct retro_game_info *game)
       return false;
    }
 
+   /* The console's system flash, where Bratz keeps the player's profile:
+    * saves/flashem/sysflash.bin, before the language goes into it */
+   {
+      const char *savedir = NULL;
+      s_sysflash_path[0] = '\0';
+      if (environ_cb(RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY, &savedir) && savedir && *savedir)
+      {
+         char dir[1024];
+         snprintf(dir, sizeof(dir), "%s/flashem", savedir);
+         path_mkdir(dir);
+         snprintf(s_sysflash_path, sizeof(s_sysflash_path), "%s/sysflash.bin", dir);
+         if (!vflash_sysflash_load(s_vf, s_sysflash_path))
+            log_cb(RETRO_LOG_WARN, "FlashEm: could not read system flash '%s'\n", s_sysflash_path);
+      }
+   }
+
    {
       static const char *const names[][2] = {
          { "English (US)", "en-us" }, { "English (UK)", "en-uk" }, { "French", "fr" },
          { "Spanish", "es" }, { "German", "de" }, { "Dutch", "nl" },
       };
+      const char *lang = "bios";
       struct retro_variable var = { "flashem_language", NULL };
       if (environ_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &var) && var.value)
          for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++)
             if (!strcmp(var.value, names[i][0]))
-               vflash_set_language(s_vf, names[i][1]);
+               lang = names[i][1];
+      vflash_set_language(s_vf, lang);
    }
 
    /* The memory card: one card, as on the console, whatever disc is in -
@@ -442,6 +461,8 @@ void retro_unload_game(void)
    {
       if (s_memcard_path[0] && !vflash_memcard_save(s_vf, s_memcard_path))
          log_cb(RETRO_LOG_ERROR, "FlashEm: could not write memory card '%s'\n", s_memcard_path);
+      if (s_sysflash_path[0] && !vflash_sysflash_save(s_vf, s_sysflash_path))
+         log_cb(RETRO_LOG_ERROR, "FlashEm: could not write system flash '%s'\n", s_sysflash_path);
       vflash_destroy(s_vf);
       s_vf = NULL;
    }

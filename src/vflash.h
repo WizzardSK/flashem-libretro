@@ -85,10 +85,15 @@ int       vflash_load_program(VFlash *vf, const char *path, uint32_t load_addr, 
  * inserted or last saved (1 when there was nothing to do or it went well). */
 int       vflash_memcard_load(VFlash *vf, const char *path);
 int       vflash_memcard_save(VFlash *vf, const char *path);
+/* The system flash, the console's own 64 KB beside the card, where games
+ * such as Bratz keep the player's profile: load and save as for the card
+ * (save writes only when the contents changed since the load or last save). */
+int       vflash_sysflash_load(VFlash *vf, const char *path);
+int       vflash_sysflash_save(VFlash *vf, const char *path);
 /* The console's language, kept in its system flash: "en-us", "en-uk", "fr",
- * "es", "de" or "nl"; "bios" (or NULL) leaves the system flash out and the
- * Boot ROM picks its own. Right after vflash_create(), before the first frame.
- * 0 for a name it does not know. */
+ * "es", "de" or "nl"; "bios" (or NULL) erases the settings and the Boot ROM
+ * picks its own. After vflash_sysflash_load(), before the first frame. 0 for
+ * a name it does not know. */
 int       vflash_set_language(VFlash *vf, const char *name);
 /* Save states: the size, and save / load into a buffer at least that big;
  * 0 on failure. A state loads only into the same build of the emulator; the

@@ -33,9 +33,16 @@ int      hw_load_phys(HW *hw, uint32_t pa, const uint8_t *data, uint32_t len);
 int      hw_memcard_insert(HW *hw, const uint8_t *data, uint32_t len);
 uint8_t *hw_memcard(HW *hw, uint32_t *len);
 int      hw_memcard_dirty(HW *hw, int clear);
-/* Fits the system flash with the console's settings in the given language
- * (0x7A Dutch ... 0x7F English US, see hw.c); 0 for any other code. Before
- * the first instruction. */
+/* The system flash, 64 KB on the SPI: the console's settings and the games'
+ * records (Bratz's profile). It is always there, erased at the start; insert
+ * copies an image in (shorter ones are padded erased, NULL erases it),
+ * hw_sysflash gives its contents to save. */
+int      hw_sysflash_insert(HW *hw, const uint8_t *data, uint32_t len);
+uint8_t *hw_sysflash(HW *hw, uint32_t *len);
+/* Writes the console's settings in the given language into the system flash
+ * (0x7A Dutch ... 0x7F English US, see hw.c; 0 erases the settings, and the
+ * ROM picks its own); 0 for any other code. Before the first instruction,
+ * after the system flash's image is inserted. */
 int      hw_set_language(HW *hw, int code);
 /* Save states (see hw.c): the size, and save / load into a buffer of at
  * least that size; 0 on failure (a load leaves the machine as it was when

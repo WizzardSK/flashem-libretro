@@ -125,7 +125,7 @@ struct HW {
     uint8_t       *mc;            /* the memory card's DataFlash, NULL: no card */
     uint8_t        mc_buf[2][1024];/* its two SRAM buffers */
     int            mc_dirty;      /* written since it was last saved */
-    uint8_t       *sf;            /* the system flash (SST25VF512), if fitted */
+    uint8_t       *sf;            /* the system flash (SST25VF512) */
     uint8_t        sf_status;     /* its status register: WEL, block protection */
     int            sf_aai;        /* auto address increment programming on */
     uint32_t       sf_aai_addr;
@@ -1532,9 +1532,8 @@ static void mathu_write(HW *hw, uint32_t pa, uint32_t v) {
  * +0x10 bit 0 is "done"; a transfer here is done at once.
  *
  * One transfer is one command to the selected device, chip select framing it.
- * On the SPI are the memory card and, on development units, a system flash;
- * GPIO A2 bit 3 picks the system flash (vtech-lib's SF_initall, MC_initall).
- * Retail units have no system flash, so only the card answers.
+ * On the SPI are the memory card and the system flash; GPIO A2 bit 3 picks
+ * the system flash (vtech-lib's SF_initall, MC_initall).
  *
  * The card is an Atmel AT45DB642 DataFlash: ID 1F 28 (vtech-tools'
  * spidump), 8 MB in 8192 pages of 1024 bytes - addressed as page << 10 |
@@ -1633,14 +1632,25 @@ static void mc_command(HW *hw, const uint8_t *tx, uint8_t *rx, int n) {
  *           Spanish, 0x7D French, 0x7E English UK, 0x7F English US)
  *   +5..12  ProductID
  *   +13..14 CRC-16 (0x1021, augmented, from 0) of +1..12, little endian
- * Fitted only when a language is chosen: without it the ROM falls back to
- * its own default, as it always did here. */
+ * Without that record the ROM picks its own default language.
+ *
+ * Games keep records there too, through the ROM's API at 0x10007000 (read
+ * 0x1000AEF0): Bratz Fashion Pixiez makes the player's profile (magic 0x131)
+ * at a new game and reads it back when the cinema or the park loads
+ * (0x104A93F8). Without the chip the read failed, the girl was built from an
+ * empty record and the game jumped through a garbage pointer: the "restart"
+ * of #8. So the chip is always fitted, and kept in a file like the card.
+ *
+ * The chip drives its output only while it answers; for the bytes clocked
+ * while it takes a command and its address the ROM's driver reads 0 (its
+ * programming loop at 0x10007B34 polls with a 16-bit "03 00" and waits for
+ * bit 0 to clear: with 0xFF there it spent 0x100000 polls on every byte). */
 #define SF_SIZE 0x10000u
 
 static void sf_command(HW *hw, const uint8_t *tx, uint8_t *rx, int n) {
     uint8_t *f = hw->sf;
     uint32_t a = ((uint32_t)tx[1] << 16 | tx[2] << 8 | tx[3]) & (SF_SIZE - 1);
-    memset(rx, 0xFF, (size_t)n);
+    memset(rx, 0x00, (size_t)n);
     switch (tx[0]) {
     case 0xAB: case 0x90:     /* read ID: manufacturer and device alternate */
         for (int i = 4; i < n; i++) rx[i] = ((a + (uint32_t)i - 4) & 1) ? 0x48 : 0xBF;
@@ -1694,11 +1704,23 @@ static uint16_t sf_crc16(const uint8_t *p, int n) {
     return crc;
 }
 
-int hw_set_language(HW *hw, int code) {
-    if (code < 0x7A || code > 0x7F) return 0;
-    if (!hw->sf && !(hw->sf = malloc(SF_SIZE))) return 0;
+int hw_sysflash_insert(HW *hw, const uint8_t *data, uint32_t len) {
     memset(hw->sf, 0xFF, SF_SIZE);
-    hw->sf_status = 0x0C;     /* protected at power-up, as the SST25VF512 is */
+    if (data) memcpy(hw->sf, data, len < SF_SIZE ? len : SF_SIZE);
+    return 1;
+}
+
+uint8_t *hw_sysflash(HW *hw, uint32_t *len) {
+    if (len) *len = SF_SIZE;
+    return hw->sf;
+}
+
+/* The settings record at 0xE000, the two 4 KB sectors that can hold it erased
+ * first; the games' records below stay. Code 0 only erases them. */
+int hw_set_language(HW *hw, int code) {
+    if (code && (code < 0x7A || code > 0x7F)) return 0;
+    memset(hw->sf + 0xE000, 0xFF, 0x2000);
+    if (!code) return 1;
     uint8_t *r = hw->sf + 0xE000;
     uint32_t option = (uint32_t)code << 12 | 0x3;   /* both logos on */
     r[0] = 0x22;
@@ -1720,7 +1742,7 @@ static void spi_transfer(HW *hw, uint32_t ctrl) {
     /* GPIO A2 bit 3 low: the card, if one is in; high: the system flash */
     if (hw->mc && n && !(hw->gpio[0].out[2] & 0x08))
         mc_command(hw, tx, rx, n);
-    else if (hw->sf && n && (hw->gpio[0].out[2] & 0x08))
+    else if (n && (hw->gpio[0].out[2] & 0x08))
         sf_command(hw, tx, rx, n);
     uint64_t in = 0;
     for (int i = 0; i < n; i++) in = in << 8 | rx[i];
@@ -1729,8 +1751,13 @@ static void spi_transfer(HW *hw, uint32_t ctrl) {
         uint32_t d = hw->spi[0x1C >> 2];
         hw->spi[0x1C >> 2] = (bits == 32 ? 0 : d << bits) | (uint32_t)in;
     } else {
+        /* +0x20 ends with the last 32 bits received; +0x1C keeps the first
+         * 32. The game kernel sends the card's ID command (9F) as 40 bits
+         * and wants 1F 28 00 in the low bytes of +0x1C: with +0x1C taking
+         * what a 64-bit shift left there (one byte of the reply), the card
+         * failed that check and its file system was never used. */
         reg = (bits == 64 ? 0 : reg << bits) | in;
-        hw->spi[0x1C >> 2] = (uint32_t)(reg >> 32);
+        hw->spi[0x1C >> 2] = (uint32_t)(in >> (bits - 32));
         hw->spi[0x20 >> 2] = (uint32_t)reg;
     }
 }
@@ -1750,10 +1777,28 @@ static void spi_write(HW *hw, uint32_t pa, uint32_t v) {
         spi_transfer(hw, v);
 }
 
+/* A card comes formatted: the game kernels' card file system (Bratz Fashion
+ * Pixiez's mount, 0x10A2E7C8) wants its header, "VFLASH_EXT_FLAG" and a
+ * state byte, in two copies, at byte 0 and at 0x4000. With the state 0xFF in
+ * both (a card not used yet) the game marks the first copy valid (0xA5),
+ * takes the 16 KB table area as it is and mounts the card. A card with no
+ * header was "not formatted" there and the game cannot format one: Save
+ * failed, and the player's profile, which lives on the card, was never made
+ * (#8). So a card that is erased at the start - new, or written blank by an
+ * earlier build - gets the two headers. */
+static void mc_format_if_blank(uint8_t *mc) {
+    static const char flag[15] = { 'V','F','L','A','S','H','_','E','X','T','_','F','L','A','G' };
+    for (uint32_t i = 0; i < 0x8000; i++)
+        if (mc[i] != 0xFF) return;
+    memcpy(mc, flag, sizeof flag);
+    memcpy(mc + 0x4000, flag, sizeof flag);
+}
+
 int hw_memcard_insert(HW *hw, const uint8_t *data, uint32_t len) {
     if (!hw->mc && !(hw->mc = malloc(MC_SIZE))) return 0;
     memset(hw->mc, 0xFF, MC_SIZE);
     if (data) memcpy(hw->mc, data, len < MC_SIZE ? len : MC_SIZE);
+    mc_format_if_blank(hw->mc);
     hw->mc_dirty = 0;
     return 1;
 }
@@ -1797,7 +1842,7 @@ int hw_state_save(HW *hw, void *data, size_t size) {
     memcpy(p, hw->cpu, sizeof(ARM9));  p += sizeof(ARM9);
     memcpy(p, hw, sizeof(HW));         p += sizeof(HW);
     memcpy(p, hw->ram, RAM_SIZE);      p += RAM_SIZE;
-    if (hw->sf) memcpy(p, hw->sf, SF_SIZE); else memset(p, 0xFF, SF_SIZE);
+    memcpy(p, hw->sf, SF_SIZE);
     p += SF_SIZE;
     ge_state_save(p);
     return 1;
@@ -1856,7 +1901,7 @@ int hw_state_load(HW *hw, const void *data, size_t size) {
     free(old);
 
     memcpy(hw->ram, p, RAM_SIZE);  p += RAM_SIZE;
-    if (hw->sf) memcpy(hw->sf, p, SF_SIZE);
+    memcpy(hw->sf, p, SF_SIZE);
     p += SF_SIZE;
     ge_state_load(p);
 
@@ -2320,6 +2365,9 @@ static void mmio_wr(HW *hw, uint32_t pa, uint32_t v, int size) {
     case 0xBC00: dmac_write(hw, pa, v); return;
     case 0xC000: zevio_dsp_dma_write(&hw->zsp, pa & 0xFFFF, v); return;
     case 0xB000:
+        if (ENV_ONCE("VFLASH_SNDLOG") && (pa & 0xFFFF) >= 0x1000)
+            printf("[SND] write %04X = %08X PC=%08X frame %lu\n", pa & 0xFFFF, v,
+                   hw->cpu->r[15], (unsigned long)hw->frame);
         midi_write(&hw->midi,pa & 0xFFFF,v,hw->cpu->r[15]-(hw->cpu->thumb?4:8));
         if ((pa & 0xFFFF) == 0x1004) snd_timer_arm(hw);
         return;
@@ -2557,6 +2605,9 @@ HW *hw_create(ARM9 *cpu, const uint8_t *rom, uint32_t rom_size,
     hw->rom = rom;
     hw->rom_size = rom_size;
     hw->ram = calloc(1, RAM_SIZE);
+    hw->sf = malloc(SF_SIZE);
+    memset(hw->sf, 0xFF, SF_SIZE);
+    hw->sf_status = 0x0C;     /* protected at power-up, as the SST25VF512 is */
     zevio_dsp_init(&hw->zsp, hw->ram, RAM_BASE, RAM_SIZE);
     hw->cd = cd;
     hw->fb = framebuf;
@@ -2621,6 +2672,7 @@ HW *hw_create(ARM9 *cpu, const uint8_t *rom, uint32_t rom_size,
 
 void hw_destroy(HW *hw) {
     if (!hw) return;
+    ge_shutdown();
 #ifdef FLASHEM_JIT
     jit_shutdown();
 #endif
@@ -2642,6 +2694,8 @@ static void timers_run(HW *hw, uint64_t cycles) {
         if(frames>256) frames=256;
         int16_t samples[512];
         midi_render(&hw->midi,samples,(unsigned)frames);
+        /* the voice address mark (midi.c voice_moved) pends at 0x1004 like the timer */
+        if (hw->midi.regs[0x1004 / 4] & 0x3F) int_set(hw, INT_SOUND, 1);
         if(hw->audio_push) hw->audio_push(hw->audio_ctx,samples,(uint32_t)frames*2);
         hw->audio_acc-=frames*hw->cpu_hz;
     }
@@ -2947,6 +3001,13 @@ void hw_run_frame(HW *hw) {
         printf("\n");
         memset(hw->irq_by_line, 0, sizeof hw->irq_by_line);
         printf("[HW]   idle: %u%% of slices skipped\n", (unsigned)(hw->idle_slices * 256ull * 100 / (hw->cpu_hz ? hw->cpu_hz : 1)));
+        if (ENV_ONCE("VFLASH_SNDLOG")) {   /* active voices: cursor / end, and 0x1004, 0x1020 */
+            printf("[SND] 1004=%08X 1020=%08X active:", hw->midi.regs[0x1004 / 4], hw->midi.regs[0x1020 / 4]);
+            for (int v = 0; v < MIDI_VOICES; v++)
+                if (hw->midi.active >> v & 1)
+                    printf(" %d@%08X/%08X", v, hw->midi.cursor[v], hw->midi.regs[v * 16 + 1]);
+            printf("\n");
+        }
         hw->idle_slices = 0;
         printf("[HW]   ge: %u lists, %u sprites, %u fills, %u model calls, %u triangles, %u pixels total\n",
                hw->ge.lists, hw->ge.sprites, hw->ge.fills, hw->ge.calls, hw->ge.tris, hw->ge.pixels);

@@ -19,6 +19,7 @@ struct VFlash {
     uint8_t  *rom;
     uint32_t  rom_size;
     uint32_t  framebuf[VFLASH_FB_MAX_W * VFLASH_FB_MAX_H];
+    uint8_t  *sf_saved;   /* the system flash as last loaded or saved */
 };
 
 static char s_bios_dir[1024];
@@ -121,12 +122,43 @@ int vflash_memcard_load(VFlash *vf, const char *path) {
     return ok;
 }
 
+int vflash_sysflash_load(VFlash *vf, const char *path) {
+    uint32_t len;
+    uint8_t *sf = hw_sysflash(vf->hw, &len);
+    FILE *f = fopen(path, "rb");
+    if (f) {
+        uint8_t *data = malloc(len);
+        size_t n = data ? fread(data, 1, len, f) : 0;
+        int err = !data || ferror(f);
+        fclose(f);
+        if (!err) hw_sysflash_insert(vf->hw, data, (uint32_t)n);
+        free(data);
+        if (err) return 0;
+    }
+    free(vf->sf_saved);
+    vf->sf_saved = malloc(len);
+    if (vf->sf_saved) memcpy(vf->sf_saved, sf, len);
+    return 1;
+}
+
+int vflash_sysflash_save(VFlash *vf, const char *path) {
+    uint32_t len;
+    uint8_t *sf = hw_sysflash(vf->hw, &len);
+    if (vf->sf_saved && !memcmp(vf->sf_saved, sf, len)) return 1;
+    FILE *f = fopen(path, "wb");
+    if (!f) return 0;
+    int ok = fwrite(sf, 1, len, f) == len;
+    if (fclose(f) != 0) ok = 0;
+    if (ok && (vf->sf_saved || (vf->sf_saved = malloc(len)))) memcpy(vf->sf_saved, sf, len);
+    return ok;
+}
+
 int vflash_set_language(VFlash *vf, const char *name) {
     static const struct { const char *name; int code; } languages[] = {
         { "en-us", 0x7F }, { "en-uk", 0x7E }, { "fr", 0x7D },
         { "es", 0x7C }, { "de", 0x7B }, { "nl", 0x7A },
     };
-    if (!name || !strcmp(name, "bios")) return 1;
+    if (!name || !strcmp(name, "bios")) return hw_set_language(vf->hw, 0);
     for (size_t i = 0; i < sizeof(languages) / sizeof(languages[0]); i++)
         if (!strcmp(name, languages[i].name)) return hw_set_language(vf->hw, languages[i].code);
     return 0;
@@ -247,6 +279,7 @@ void vflash_destroy(VFlash *vf) {
     cdrom_destroy(vf->cd);
     audio_destroy(vf->audio);
     free(vf->rom);
+    free(vf->sf_saved);
     free(vf);
 }
 

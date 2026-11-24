@@ -46,7 +46,12 @@ static void print_usage(const char *prog) {
         "               a BOOT.BIN, or a raw binary at address A (hex)\n"
         "  --entry A    Start the loaded program at address A (hex) instead\n"
         "  --memcard F  Insert the memory card image F (8 MB, blank if F does not\n"
-        "               exist); written back on exit when the card was written to\n"
+        "               exist); written back on exit when the card was written to.\n"
+        "               Default: memcard.bin beside the program (not with --headless)\n"
+        "  --sysflash F The console's system flash image F (64 KB, erased if F does\n"
+        "               not exist), written back on exit when it changed. Games keep\n"
+        "               records there (Bratz: the player's profile). Default:\n"
+        "               sysflash.bin beside the program (not with --headless)\n"
         "  --quiet      Show only what the program writes to its UARTs, not the\n"
         "               emulator's log\n"
         "  --help       Show this help\n\n"
@@ -95,23 +100,34 @@ static void line_buffered(FILE *f) {
 #endif
 }
 
-/* Ask for a disc image with the system's own file picker: the Windows common
- * dialog, AppleScript's on macOS, zenity or kdialog elsewhere. 1 with the
- * chosen path in out, 0 when cancelled or when there is no picker. */
-static int choose_disc(char *out, size_t size) {
+/* Ask for a file with the system's own file picker: the Windows common
+ * dialog, AppleScript's on macOS, zenity or kdialog elsewhere. kind 0: a disc
+ * image to open; 1: a save state to load; 2: a save state to write (a save
+ * dialog, ".state" added when the name has no extension). 1 with the chosen
+ * path in out, 0 when cancelled or when there is no picker. */
+static int choose_file(char *out, size_t size, int kind) {
 #ifdef _WIN32
     OPENFILENAMEA ofn;
     memset(&ofn, 0, sizeof(ofn));
     out[0] = '\0';
     ofn.lStructSize = sizeof(ofn);
-    ofn.lpstrFilter = "V.Flash disc (*.cue;*.bin;*.iso)\0*.cue;*.bin;*.iso\0All files\0*.*\0";
+    ofn.lpstrFilter = kind == 0
+        ? "V.Flash disc (*.cue;*.bin;*.iso)\0*.cue;*.bin;*.iso\0All files\0*.*\0"
+        : "FlashEm save state (*.state)\0*.state\0All files\0*.*\0";
     ofn.lpstrFile   = out;
     ofn.nMaxFile    = (DWORD)size;
-    ofn.lpstrTitle  = "FlashEm - open a disc";
-    ofn.Flags       = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+    ofn.lpstrTitle  = kind == 0 ? "FlashEm - open a disc"
+                    : kind == 1 ? "FlashEm - load a save state"
+                                : "FlashEm - save the state as";
+    ofn.lpstrDefExt = kind == 0 ? NULL : "state";
+    if (kind == 2) {
+        ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+        return GetSaveFileNameA(&ofn) ? 1 : 0;
+    }
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
     return GetOpenFileNameA(&ofn) ? 1 : 0;
 #else
-    static const char *const pickers[] = {
+    static const char *const disc[] = {
 #ifdef __APPLE__
         "osascript -e 'POSIX path of (choose file with prompt \"FlashEm - open a disc\" "
         "of type {\"cue\", \"bin\", \"iso\"})' 2>/dev/null",
@@ -121,7 +137,29 @@ static int choose_disc(char *out, size_t size) {
         "kdialog --title 'FlashEm - open a disc' --getopenfilename . "
         "'*.cue *.CUE *.bin *.BIN *.iso *.ISO|V.Flash disc' 2>/dev/null",
     };
-    for (size_t i = 0; i < sizeof(pickers) / sizeof(pickers[0]); i++) {
+    static const char *const load[] = {
+#ifdef __APPLE__
+        "osascript -e 'POSIX path of (choose file with prompt \"FlashEm - load a save state\")' 2>/dev/null",
+#endif
+        "zenity --file-selection --title='FlashEm - load a save state' "
+        "--file-filter='FlashEm save state | *.state' --file-filter='All files | *' 2>/dev/null",
+        "kdialog --title 'FlashEm - load a save state' --getopenfilename . "
+        "'*.state|FlashEm save state' 2>/dev/null",
+    };
+    static const char *const save[] = {
+#ifdef __APPLE__
+        "osascript -e 'POSIX path of (choose file name with prompt \"FlashEm - save the state as\" "
+        "default name \"flashem.state\")' 2>/dev/null",
+#endif
+        "zenity --file-selection --save --confirm-overwrite --filename=flashem.state "
+        "--title='FlashEm - save the state as' 2>/dev/null",
+        "kdialog --title 'FlashEm - save the state as' --getsavefilename flashem.state "
+        "'*.state|FlashEm save state' 2>/dev/null",
+    };
+    const char *const *pickers = kind == 0 ? disc : kind == 1 ? load : save;
+    size_t n = kind == 0 ? sizeof(disc) / sizeof(disc[0])
+             : kind == 1 ? sizeof(load) / sizeof(load[0]) : sizeof(save) / sizeof(save[0]);
+    for (size_t i = 0; i < n; i++) {
         FILE *p = popen(pickers[i], "r");
         if (!p) continue;
         out[0] = '\0';
@@ -129,13 +167,20 @@ static int choose_disc(char *out, size_t size) {
         int status = pclose(p);
         if (got) {
             out[strcspn(out, "\r\n")] = '\0';
-            if (out[0]) return 1;
+            if (out[0]) {
+                /* a name typed without an extension gets ".state" */
+                const char *slash = strrchr(out, '/');
+                if (kind == 2 && !strchr(slash ? slash : out, '.') &&
+                    strlen(out) + 7 < size)
+                    strcat(out, ".state");
+                return 1;
+            }
         }
         /* 1 is the picker's own "cancelled"; anything else (127: not
          * installed) means try the next one */
         if (status != -1 && WIFEXITED(status) && WEXITSTATUS(status) == 1) return 0;
     }
-    fprintf(stderr, "[Main] no file picker (zenity or kdialog) found; give the disc on the command line\n");
+    fprintf(stderr, "[Main] no file picker (zenity or kdialog) found\n");
     return 0;
 #endif
 }
@@ -145,10 +190,15 @@ static int choose_disc(char *out, size_t size) {
  * again. 0 when the disc cannot be opened; the running console then stays. */
 /* --language, else flashem.ini's: kept for every console started */
 static const char *s_language;
+/* --sysflash, else sysflash.bin beside the program: as the memory card, one
+ * for every console started */
+static const char *s_sysflash;
 
 static int switch_disc(VFlash **vf, Audio **audio, const char *disc_path, const char *memcard) {
     if (memcard && !vflash_memcard_save(*vf, memcard))
         fprintf(stderr, "[Main] could not write memory card %s\n", memcard);
+    if (s_sysflash && !vflash_sysflash_save(*vf, s_sysflash))
+        fprintf(stderr, "[Main] could not write system flash %s\n", s_sysflash);
     /* The disc is tried first: the running console is ended before the next
      * one is made, as the JIT serves one CPU at a time */
     CDROM *probe = cdrom_create();
@@ -165,6 +215,8 @@ static int switch_disc(VFlash **vf, Audio **audio, const char *disc_path, const 
         exit(1);
     }
     VFlash *next = *vf;
+    if (s_sysflash && !vflash_sysflash_load(next, s_sysflash))
+        fprintf(stderr, "[Main] could not read system flash %s\n", s_sysflash);
     vflash_set_language(next, s_language);
     if (memcard && !vflash_memcard_load(next, memcard))
         fprintf(stderr, "[Main] could not read memory card %s\n", memcard);
@@ -209,6 +261,8 @@ int main(int argc, char **argv) {
         }
         else if (strcmp(argv[i], "--memcard") == 0 && i+1 < argc)
             memcard = argv[++i];
+        else if (strcmp(argv[i], "--sysflash") == 0 && i+1 < argc)
+            s_sysflash = argv[++i];
         else if (strcmp(argv[i], "--entry") == 0 && i+1 < argc)
             entry = (uint32_t)strtoul(argv[++i], NULL, 16);
         else if (strcmp(argv[i], "--quiet") == 0)   quiet = 1;
@@ -233,6 +287,21 @@ int main(int argc, char **argv) {
     char *base_dir = SDL_GetBasePath();
     if (base_dir)
         vflash_set_bios_dir(base_dir);
+    /* A memory card is always in, memcard.bin beside the program unless
+     * --memcard names another: games keep progress on it (Bratz Fashion
+     * Pixiez's Save). The system flash is kept the same way in sysflash.bin:
+     * Bratz makes the player's profile there at a new game and reads it when
+     * the cinema or the park loads. Headless runs (tests) keep neither unless
+     * asked. */
+    static char default_memcard[1100], default_sysflash[1100];
+    if (!memcard && !headless && base_dir) {
+        snprintf(default_memcard, sizeof default_memcard, "%smemcard.bin", base_dir);
+        memcard = default_memcard;
+    }
+    if (!s_sysflash && !headless && base_dir) {
+        snprintf(default_sysflash, sizeof default_sysflash, "%ssysflash.bin", base_dir);
+        s_sysflash = default_sysflash;
+    }
     /* flashem.ini's controls and console settings, the command line's first */
     if (!headless)
         input_config_load(base_dir);
@@ -247,7 +316,7 @@ int main(int argc, char **argv) {
     /* No disc given: ask for one, unless the run is headless, under the
      * debugger or starts a program of its own */
     static char chosen[1024];
-    if (!disc_path && !program && !headless && !dbg_mode && choose_disc(chosen, sizeof(chosen)))
+    if (!disc_path && !program && !headless && !dbg_mode && choose_file(chosen, sizeof(chosen), 0))
         disc_path = chosen;
 
     /* Create emulator */
@@ -264,6 +333,11 @@ int main(int argc, char **argv) {
     }
     if (memcard && !vflash_memcard_load(vf, memcard)) {
         fprintf(stderr, "[Main] could not read memory card %s\n", memcard);
+        vflash_destroy(vf);
+        return 1;
+    }
+    if (s_sysflash && !vflash_sysflash_load(vf, s_sysflash)) {
+        fprintf(stderr, "[Main] could not read system flash %s\n", s_sysflash);
         vflash_destroy(vf);
         return 1;
     }
@@ -401,8 +475,40 @@ int main(int argc, char **argv) {
                     printf("[Main] Screenshot saved: screenshot.bmp\n");
                 }
             }
+            /* save_state / load_state (F6 / F8 by default, flashem.ini):
+             * flashem.state beside the program, for the same build only.
+             * With Shift held, a file picker names the state instead, so a
+             * tester can keep several (#8, TobiasAR). */
+            if ((pressed & (HOTKEY_SAVE_STATE | HOTKEY_LOAD_STATE)) && !dbg_mode && vf) {
+                const int save = (pressed & HOTKEY_SAVE_STATE) != 0;
+                char path[4096];
+                snprintf(path, sizeof path, "%sflashem.state", base_dir ? base_dir : "");
+                if (SDL_GetModState() & KMOD_SHIFT) {
+                    hotkeys = 0; /* the picker has the keyboard; nothing is held after it */
+                    if (!choose_file(path, sizeof path, save ? 2 : 1)) {
+                        printf("[STATE] %s: no file chosen\n", save ? "save" : "load");
+                        goto state_done;
+                    }
+                    frame_pacer_reset(&pacer);
+                }
+                size_t n = vflash_state_size(vf);
+                void *b = malloc(n);
+                int ok = 0;
+                if (b && save) {
+                    FILE *f = vflash_state_save(vf, b, n) ? fopen(path, "wb") : NULL;
+                    ok = f && fwrite(b, 1, n, f) == n;
+                    if (f) fclose(f);
+                } else if (b) {
+                    FILE *f = fopen(path, "rb");
+                    ok = f && fread(b, 1, n, f) == n && vflash_state_load(vf, b, n);
+                    if (f) fclose(f);
+                }
+                free(b);
+                printf("[STATE] %s %s: %s\n", save ? "save" : "load", path, ok ? "ok" : "FAILED");
+            }
+        state_done:
             if ((pressed & HOTKEY_OPEN_DISC) && !dbg_mode && !program &&
-                choose_disc(chosen, sizeof(chosen)) &&
+                choose_file(chosen, sizeof(chosen), 0) &&
                 switch_disc(&vf, &audio, chosen, memcard)) {
                 frame_pacer_reset(&pacer);
                 hotkeys = 0; /* the picker had the keyboard; nothing is held now */
@@ -576,6 +682,8 @@ int main(int argc, char **argv) {
     if (win) SDL_DestroyWindow(win);
     if (memcard && !vflash_memcard_save(vf, memcard))
         fprintf(stderr, "[Main] could not write memory card %s\n", memcard);
+    if (s_sysflash && !vflash_sysflash_save(vf, s_sysflash))
+        fprintf(stderr, "[Main] could not write system flash %s\n", s_sysflash);
     vflash_destroy(vf);
     SDL_Quit();
     printf("[Main] Exited cleanly\n");

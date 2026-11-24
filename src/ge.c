@@ -47,7 +47,8 @@ static uint16_t *px(GE *g, int x, int y) {
     return o < g->ram_size - 1 ? (uint16_t *)(g->ram + o) : NULL;
 }
 
-/* VFLASH_GEWATCH=x,y: report every write to that surface pixel. */
+/* VFLASH_GEWATCH=x,y: report every write to that surface pixel, and each
+ * triangle pixel there with its depth test. */
 static int watch_x = -1, watch_y = -1;
 static const char *watch_what;
 static uint32_t watch_pc;
@@ -108,9 +109,15 @@ static uint16_t blend_mix(uint16_t dst, uint32_t c) {
     return (uint16_t)r;
 }
 
-/* 0x1E000000 | m: bit 15 turns depth testing (and writing) on. Dingo
- * Rallye's race draws its sky dome round the camera with it off (0x4230)
- * and the world with it on (0xE230); the menus' 3D uses 0x8030. */
+/* 0x1E000000 | m: bit 15 turns depth testing and writing on; bit 14 alone
+ * tests without writing. Dingo Rallye's race draws its sky dome round the
+ * camera with 0x4230 and the world with 0xE230; the menus' 3D uses 0x8030.
+ * Bratz Fashion Pixiez draws its translucent water over the world with
+ * 0x6230 (two passes, after the bridge over it) and the sticker book's
+ * stickers with 0x7230: taken as no depth at all, the water covered the
+ * bridge and the stickers showed through the book's turning page (#8).
+ * zenable: 0 off, 1 test and write, 2 test only. VFLASH_ZTEST14=0: bit 14
+ * ignored, as before. */
 static int zenable = 1;
 /* 0x1C: render mode (EXPERIMENT, VFLASH_CULL) */
 static uint32_t reg1c = 0x6760;
@@ -119,6 +126,38 @@ static uint32_t reg1c = 0x6760;
  * Both Dingo Rallye's menus and race do 85078100, D3 (0,0) 512x240 with
  * 0x3A00/0x38E8 (a far depth), 96000000 once a frame. */
 static int zfill;
+
+/* DEPTH IN SURFACE MEMORY: the depth buffer is a region of the surface - the
+ * 0x85 depth clear (0,0) 512x240 under a display buffer's clip fills it - and
+ * a game can draw colour into it. Bratz Fashion Pixiez's loading screen draws
+ * the "Loading" lettering (opaque blue around transparent letters) with the
+ * clip at (0,0)-(511,239), then the scrolling rainbow strip into the display
+ * buffer with the depth test on: the blue is very near as a depth (inverse
+ * depth 0x7Cxx), so the rainbow shows only through the letters. Our depth is
+ * the float zbuf, kept at display-buffer coordinates. The region lies above
+ * the surface's top (rows 0-239 with the top at 240): there is no colour
+ * memory behind it. A sprite drawn with the clip within the last depth
+ * clear's rectangle at origin (0, 0) sets zbuf at (x, y) + the origin that
+ * clear was made under, each texel taken as the f16 inverse depth it is.
+ * VFLASH_ZALIAS=0 turns it off. */
+static int zal_ox = -1, zal_oy, zal_w, zal_h;
+static int zalias_on(void) {
+    static int on = -1;
+    if (on < 0) on = !getenv("VFLASH_ZALIAS") || atoi(getenv("VFLASH_ZALIAS"));
+    return on;
+}
+static int zalias_active(const GE *g) {
+    return zal_ox >= 0 && (zal_ox | zal_oy) && !g->clip_x0 && !g->clip_y0 &&
+           g->clip_x1 < zal_w && g->clip_y1 < zal_h && g->clip_y1 < g->top &&
+           zalias_on();
+}
+static void zalias_px(int x, int y, uint16_t c) {
+    if (x < 0 || y < 0 || x >= zal_w || y >= zal_h) return;
+    int X = x + zal_ox, Y = y + zal_oy;
+    if (X >= 1024 || Y >= 1024) return;
+    double inverse = ge_f16_to(c);
+    zbuf[Y * 1024 + X] = inverse > 0 ? (float)(1.0 / inverse) : 1e30f;
+}
 
 /* Clipped like everything else: Dingo Rallye's menu frame fills (0,0) 512x240
  * with 0x38E8 under a (512,480)-(1023,719) clip, and once it moves the
@@ -262,6 +301,14 @@ static void sprite(GE *g, uint32_t hdr, uint32_t pc) {
     if (sprd < 0) sprd = !getenv("VFLASH_SPRD") || atoi(getenv("VFLASH_SPRD")) != 0;
     float sa = (float)ge_f16_to((uint16_t)rd(g, pc + 4)), sz = sa > 0 ? 1.0f / sa : 1e30f;
     int sdepth = sprd && !g->nodepth;
+    /* Strict for sprites: a sprite at the same depth as one drawn before it
+     * stays behind it. Bratz's shop draws its button bar as the green button
+     * with "Confirm" and then the bar's background 7 px further right, both
+     * at one depth; with less-or-equal the background covered the button and
+     * the text (#8; the console shows them, Tobias's photo). Triangles stay
+     * less-or-equal (zless). VFLASH_SPRSTRICT=0: less-or-equal. */
+    static int sstrict = -1;
+    if (sstrict < 0) sstrict = !getenv("VFLASH_SPRSTRICT") || atoi(getenv("VFLASH_SPRSTRICT"));
     /* colour word (flag bit 2), 00BBGGRR: tints the texels; normally 00FFFFFF */
     static int dsta = -1;
     if (dsta < 0) dsta = !getenv("VFLASH_DSTA") || atoi(getenv("VFLASH_DSTA"));
@@ -270,6 +317,7 @@ static void sprite(GE *g, uint32_t hdr, uint32_t pc) {
     int t4444 = (f & 1) && (g->tex_fmt & 0x100);
     int da = dsta && (f & 1) && !t4444 && (blend & 0x43) == 0x42;
     const uint32_t flat = (f & 1) ? 0 : (rd(g, pc + 16) & 0xFFFF) | 0x100000u;
+    const int zal = zalias_active(g);
     for (int y = ys; y < h; y++) {
         /* the row's surface memory when px() would give every pixel of it
          * (movies are full-screen sprites: px() per pixel was a good part of
@@ -284,12 +332,15 @@ static void sprite(GE *g, uint32_t hdr, uint32_t pc) {
             uint32_t c = (f & 1) ? tex_get(g, u0 + x, v0 + y) : flat;
             uint16_t *p;
             int xx0 = x0 + x;
+            /* into the depth buffer: no colour memory behind it (it lies
+             * above the surface's top), only depth */
+            if (zal && c) { zalias_px(xx0, yy0, (uint16_t)c); continue; }
             if (c && (p = row ? (uint16_t *)(row + (xx0 >> 5) * 512) + (xx0 & 31) : px(g, xx0, yy0))) {
                 int yy = y0 + y, xx = x0 + x;
                 int in = yy >= 0 && yy < 1024 && xx >= 0 && xx < 1024;
                 if (sdepth && in) {
                     float *zp = &zbuf[yy * 1024 + xx];
-                    if (zenable && sz > *zp) continue;
+                    if (zenable && (sstrict ? sz >= *zp : sz > *zp)) continue;
                     *zp = sz;
                 }
                 if (da) {
@@ -592,13 +643,21 @@ static inline void tquad(int iu, int iv, uint32_t c[4]) {
     }
 }
 
+/* Read once, before a triangle's rows may run on several threads:
+ * VFLASH_FILTER=0 point samples, VFLASH_ZLESS=1 makes the triangles' depth
+ * test strict (see raster) */
+static int filter_on = -1, zless_on;
+static void filter_init(void) {
+    if (filter_on >= 0) return;
+    zless_on = getenv("VFLASH_ZLESS") && atoi(getenv("VFLASH_ZLESS"));
+    filter_on = !getenv("VFLASH_FILTER") || atoi(getenv("VFLASH_FILTER"));
+}
+
 /* Bilinear texture lookup for triangles (VFLASH_FILTER=0 turns it off):
  * point sampling left detailed textures, like Dingo Rallye's race ground,
  * as speckle. Falls back to the nearest texel next to transparent ones. */
 static inline uint32_t filtered(GE *g, float fu, float fv) {
-    static int on = -1;
-    if (on < 0) on = !getenv("VFLASH_FILTER") || atoi(getenv("VFLASH_FILTER"));
-    if (!on) return TEXEL(g, (int)fu, (int)fv);
+    if (!filter_on) return TEXEL(g, (int)fu, (int)fv);
     fu -= 0.5f; fv -= 0.5f;
     int iu = ifloor(fu), iv = ifloor(fv);
     float du = fu - (float)iu, dv = fv - (float)iv;
@@ -633,13 +692,266 @@ static float edge(float ax, float ay, float bx, float by, float cx, float cy) {
     return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
 }
 
+/* One triangle's rows ya..yb (raster() splits big triangles between threads:
+ * every row writes only its own colour, depth and alpha) */
+typedef struct {
+    GE *g; V3 a, b, c; int x0, x1, tw, th, lit, fog, ztest, flat, noz;
+    float ra, rb, rc, ua, ub, uc, va, vb, vc, la[3], lb[3], lc[3], rarea, s0, s1, zflat;
+} RTri;
+
+static long raster_rows(const RTri *r, int ya, int yb) {
+    GE *g = r->g; V3 a = r->a, b = r->b, c = r->c;
+    const int x0 = r->x0, x1 = r->x1, lit = r->lit, fog = r->fog, ztest = r->ztest;
+    const int flat = r->flat, noz = r->noz;
+    const float ra = r->ra, rb = r->rb, rc = r->rc, ua = r->ua, ub = r->ub, uc = r->uc;
+    const float va = r->va, vb = r->vb, vc = r->vc, rarea = r->rarea, s0 = r->s0, s1 = r->s1;
+    const float zflat = r->zflat;
+    const float *la = r->la, *lb = r->lb, *lc = r->lc;
+    const int zless = zless_on;
+    long npx = 0;
+    for (int y = ya; y <= yb; y++) {
+        float py_ = (float)y + 0.5f;
+        /* the span where w0, w1, w2 >= 0 on this row (one pixel of slack each
+         * side; the exact test below still decides) */
+        float w0x = ((c.x - b.x) * (py_ - b.y) + (c.y - b.y) * b.x) * rarea;   /* w0 at px = 0 */
+        float w1x = ((a.x - c.x) * (py_ - c.y) + (a.y - c.y) * c.x) * rarea;
+        float lo = (float)x0, hi = (float)x1 + 1;
+        /* w = s * px + w_at_0 >= 0 */
+        float ss[3] = { s0, s1, -s0 - s1 }, ww[3] = { w0x, w1x, 1.0f - w0x - w1x };
+        for (int i = 0; i < 3; i++) {
+            if (ss[i] > 0) { float t = -ww[i] / ss[i]; if (t > lo) lo = t; }
+            else if (ss[i] < 0) { float t = -ww[i] / ss[i]; if (t < hi) hi = t; }
+            else if (ww[i] < -1e-4f) { lo = hi + 1; break; }
+        }
+        int xs = (int)floorf(lo - 0.5f) - 1, xe = (int)ceilf(hi - 0.5f) + 1;
+        if (xs < x0) xs = x0;
+        if (xe > x1) xe = x1;
+        /* the row's surface memory, when px() would give every pixel of it */
+        uint8_t *row = NULL;
+        if (xs >= 0 && xe <= 1023 && y >= g->top) {
+            uint32_t o = g->surface + (uint32_t)(y >> 3) * 16384 + (uint32_t)(y & 7) * 64 - RAM_BASE;
+            if ((uint64_t)o + 16384 <= g->ram_size) row = g->ram + o;
+        }
+        for (int x = xs; x <= xe; x++) {
+            float px_ = (float)x + 0.5f;
+            /* the edge functions are linear in px: w = s * px + w at 0 */
+            float w0 = s0 * px_ + w0x;
+            float w1 = s1 * px_ + w1x;
+            float w2 = 1.0f - w0 - w1;
+            if (w0 < 0 || w1 < 0 || w2 < 0) continue;
+            float z = flat || noz ? zflat : 1.0f / (w0 * ra + w1 * rb + w2 * rc);
+            float *zp = &zbuf[y * 1024 + x];
+            if (x == watch_x && y == watch_y)
+                printf("[GEW] (%d,%d) z %.4f vs %.4f, test %s, by the record at %08X\n", x, y, z, *zp,
+                       !ztest ? "off" : (zless ? z >= *zp : z > *zp) ? "fails" : "passes", watch_pc);
+            if (ztest && (zless ? z >= *zp : z > *zp)) continue;
+            uint32_t col;
+            if (g->tex_bpp) {
+                col = filtered(g, (w0 * ua + w1 * ub + w2 * uc) * z, (w0 * va + w1 * vb + w2 * vc) * z);
+                if (!col) continue;
+            } else col = a.c | 0x100000u;
+            if (lit || fog) {
+                float l[3];
+                for (int k = 0; k < 3; k++) l[k] = (w0 * la[k] + w1 * lb[k] + w2 * lc[k]) * z;
+                col = shade(col, l, z);
+            }
+            uint16_t *p = row ? (uint16_t *)(row + (x >> 5) * 512) + (x & 31) : px(g, x, y);
+            if (p) {
+                *p = blend_px(*p, col); if (zenable == 1) *zp = z; npx++;
+                if (watch_x >= 0) watch(g, x, y, *p);
+                abuf[y * 1024 + x] = g->tex_bpp && (g->tex_fmt & 0x100) ? (uint8_t)(col >> 16 & 31) : 0;
+            }
+        }
+    }
+    return npx;
+}
+
+/* Big triangles are rasterised by several threads, each taking 8-row chunks
+ * from a shared counter until none are left (chunks, not a fixed split: on
+ * big.LITTLE CPUs a fixed share waits for the slowest core). Bratz's Music
+ * Video Maker draws ~46 triangles a frame of ~8500 pixels each: the
+ * rasteriser was half of its frame time on one core (#8). Rows are
+ * independent - each writes only its own colour, depth and alpha - and the
+ * caller waits for all of them, so the result is the same as on one thread.
+ * VFLASH_GETHREADS=n sets the helper threads; none by default: on a
+ * big.LITTLE Chromebook (2 x A76 + 6 x A55) the helpers got the slow cores
+ * and the Music Video Maker went from 23 to 20-22 fps with 1-3 of them; on
+ * an x86 Ryzen R1606G (2 cores, 4 threads) 26 -> 27-28 fps with one, 26 with
+ * three. The pictures are byte for byte the same. Most of its triangles are
+ * small, under the size that is split. Ended by ge_shutdown (hw_destroy). */
+#if defined(_WIN32) || defined(__linux__) || defined(__APPLE__) || defined(__ANDROID__)
+#define GE_THREADS 1
+#endif
+
+#define ROW_CHUNK 8
+/* The job: the triangle, and one 64-bit word holding its generation (high)
+ * and the next row to take (low), so a helper that wakes late for a
+ * triangle already finished cannot take rows of the next one. The caller
+ * never sleeps waiting: it takes rows itself and spins only for chunks
+ * still being drawn - sleeping, it was moved to a slow core or clock and the
+ * Music Video Maker ran at half speed on a big.LITTLE Chromebook. */
+static RTri pool_tri[2];             /* by generation & 1 */
+static uint64_t pool_job;           /* generation << 32 | last row << 16 | next row */
+static int pool_rows_done;
+static long pool_px;
+
+/* Takes rows of the job of generation gen until none are left. The
+ * triangle is read only after a chunk of this generation is taken: until
+ * that chunk is drawn, the caller cannot start the next triangle. */
+static void pool_work(uint32_t gen) {
+    for (;;) {
+        uint64_t v = __atomic_load_n(&pool_job, __ATOMIC_ACQUIRE);
+        if ((uint32_t)(v >> 32) != gen) break;
+        int y = (int)(v & 0xFFFF), y1 = (int)(v >> 16 & 0xFFFF);
+        if (y > y1) break;
+        if (!__atomic_compare_exchange_n(&pool_job, &v, v + ROW_CHUNK, 0,
+                                         __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+            continue;
+        int ye = y + ROW_CHUNK - 1;
+        if (ye > y1) ye = y1;
+        long n = raster_rows(&pool_tri[gen & 1], y, ye);
+        __atomic_fetch_add(&pool_px, n, __ATOMIC_ACQ_REL);
+        __atomic_fetch_add(&pool_rows_done, ye - y + 1, __ATOMIC_ACQ_REL);
+    }
+}
+
+#ifdef GE_THREADS
+#ifdef _WIN32
+#include <windows.h>
+typedef HANDLE pool_thread_t;
+static CRITICAL_SECTION pool_mu;
+static CONDITION_VARIABLE pool_go;
+#define POOL_LOCK()   EnterCriticalSection(&pool_mu)
+#define POOL_UNLOCK() LeaveCriticalSection(&pool_mu)
+#define POOL_WAIT(c)  SleepConditionVariableCS(&(c), &pool_mu, INFINITE)
+#define POOL_WAKE(c)  WakeAllConditionVariable(&(c))
+#else
+#include <pthread.h>
+typedef pthread_t pool_thread_t;
+static pthread_mutex_t pool_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t pool_go = PTHREAD_COND_INITIALIZER;
+#define POOL_LOCK()   pthread_mutex_lock(&pool_mu)
+#define POOL_UNLOCK() pthread_mutex_unlock(&pool_mu)
+#define POOL_WAIT(c)  pthread_cond_wait(&(c), &pool_mu)
+#define POOL_WAKE(c)  pthread_cond_broadcast(&(c))
+#endif
+#define POOL_MAX 8
+static pool_thread_t pool_th[POOL_MAX];
+static int pool_n = -1;             /* helper threads; -1 not started yet */
+static unsigned pool_gen;           /* a new triangle for the helpers */
+static int pool_quit;
+
+#ifdef _WIN32
+static DWORD WINAPI pool_main(LPVOID arg)
+#else
+static void *pool_main(void *arg)
+#endif
+{
+    (void)arg;
+    unsigned seen = 0;
+    POOL_LOCK();
+    for (;;) {
+        while (pool_gen == seen && !pool_quit) POOL_WAIT(pool_go);
+        if (pool_quit) break;
+        seen = pool_gen;
+        POOL_UNLOCK();
+        pool_work(seen);
+        POOL_LOCK();
+    }
+    POOL_UNLOCK();
+    return 0;
+}
+
+static void pool_start(void) {
+    const char *e = getenv("VFLASH_GETHREADS");
+    int n = e ? atoi(e) : 0;
+    if (n < 0) n = 0;
+    if (n > POOL_MAX) n = POOL_MAX;
+#ifdef _WIN32
+    InitializeCriticalSection(&pool_mu);
+    InitializeConditionVariable(&pool_go);
+#endif
+    pool_quit = 0;
+    pool_n = 0;
+    for (int i = 0; i < n; i++) {
+#ifdef _WIN32
+        pool_th[i] = CreateThread(NULL, 0, pool_main, NULL, 0, NULL);
+        if (!pool_th[i]) break;
+#else
+        if (pthread_create(&pool_th[i], NULL, pool_main, NULL)) break;
+#endif
+        pool_n++;
+    }
+}
+
+/* 1 when the rows were drawn by the pool (with the caller taking chunks too) */
+static int pool_rows(GE *g, const RTri *r, int y0, int y1) {
+    if (pool_n < 0) pool_start();
+    if (pool_n == 0) return 0;
+    POOL_LOCK();
+    uint32_t gen = ++pool_gen;
+    pool_tri[gen & 1] = *r;
+    __atomic_store_n(&pool_px, 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&pool_rows_done, 0, __ATOMIC_RELEASE);
+    __atomic_store_n(&pool_job, (uint64_t)gen << 32 | (uint64_t)y1 << 16 | (uint32_t)y0,
+                     __ATOMIC_RELEASE);
+    POOL_WAKE(pool_go);
+    POOL_UNLOCK();
+    pool_work(gen);
+    /* the chunks helpers still draw: short, so spun for, not slept on */
+    while (__atomic_load_n(&pool_rows_done, __ATOMIC_ACQUIRE) < y1 - y0 + 1)
+        ;
+    g->pixels += __atomic_load_n(&pool_px, __ATOMIC_ACQUIRE);
+    return 1;
+}
+
+void ge_shutdown(void) {
+    if (pool_n <= 0) { pool_n = -1; return; }
+    POOL_LOCK();
+    pool_quit = 1;
+    POOL_WAKE(pool_go);
+    POOL_UNLOCK();
+    for (int i = 0; i < pool_n; i++) {
+#ifdef _WIN32
+        WaitForSingleObject(pool_th[i], INFINITE);
+        CloseHandle(pool_th[i]);
+#else
+        pthread_join(pool_th[i], NULL);
+#endif
+    }
+#ifdef _WIN32
+    DeleteCriticalSection(&pool_mu);
+#endif
+    pool_n = -1;
+}
+#else
+static int pool_rows(GE *g, const RTri *r, int y0, int y1) {
+    (void)g; (void)r; (void)y0; (void)y1; (void)pool_work; (void)pool_job;
+    return 0;
+}
+void ge_shutdown(void) {}
+#endif
+
 static void raster(GE *g, V3 a, V3 b, V3 c) {
     if (!a.ok || !b.ok || !c.ok || g->no3d) return;
     float area = edge(a.x, a.y, b.x, b.y, c.x, c.y);
+    /* Back faces: with 0x1C bit 6 set, a triangle facing away (clockwise on
+     * the screen, area > 0 here) is not drawn. Bratz Fashion Pixiez's Bratz
+     * World puts the camera inside a hollow tree trunk; drawn from inside,
+     * the trunk covered the whole menu in brown bark (#8). SpongeBob and
+     * Spider-Man look the same with it. VFLASH_CULL=0 draws every face,
+     * 1 culls the other winding, 0x<bit>2 tests another bit of 0x1C. */
     {
         static int cull = -1;
-        if (cull < 0) cull = getenv("VFLASH_CULL") ? atoi(getenv("VFLASH_CULL")) : 0;
-        if (cull && (reg1c & (1u << (cull >> 4 ? cull >> 4 : 6)))) {
+        if (cull < 0) cull = getenv("VFLASH_CULL") ? atoi(getenv("VFLASH_CULL")) : 2;
+        /* Bit 11 with it (0x6F60: Bratz's sticker book, its water layer)
+         * draws both faces: the stickers come as 6-index strips whose
+         * corner triangle faces the other way, and culling it cut the
+         * corner off every sticker (#8). VFLASH_CULL11=0: bit 11 ignored. */
+        static int b11 = -1;
+        if (b11 < 0) b11 = !getenv("VFLASH_CULL11") || atoi(getenv("VFLASH_CULL11"));
+        if (cull && (reg1c & (1u << (cull >> 4 ? cull >> 4 : 6))) &&
+            !(b11 && (reg1c & 0x800))) {
             if ((cull & 15) == 1 && area < 0) return;
             if ((cull & 15) == 2 && area > 0) return;
         }
@@ -674,11 +986,10 @@ static void raster(GE *g, V3 a, V3 b, V3 c) {
      * linear in px with slopes -(c.y - b.y) / area and -(a.y - c.y) / area */
     float s0 = -(c.y - b.y) * rarea, s1 = -(a.y - c.y) * rarea;
     int ztest = zenable && !g->nodepth;
-    /* Less-or-equal, as for sprites: Bratz draws its selected menu button twice
-     * over the same quad, a pale glow and then the "GAME ZONE" banner; a strict
-     * test dropped the banner and the button was blank (#7). VFLASH_ZLESS=1: strict. */
-    static int zless = -1;
-    if (zless < 0) zless = getenv("VFLASH_ZLESS") && atoi(getenv("VFLASH_ZLESS"));
+    /* The depth test is less-or-equal (zless_on, see filter_init): Bratz
+     * draws its selected menu button twice over the same quad, a pale glow
+     * and then the "GAME ZONE" banner; a strict test dropped the banner and
+     * the button was blank (#7). VFLASH_ZLESS=1: strict. */
     /* All three corners at one depth (2D layers, sprites drawn as triangles):
      * z is constant, so the per-pixel division goes (#7) */
     float rmax = fmaxf(ra, fmaxf(rb, rc)), rmin = fminf(ra, fminf(rb, rc));
@@ -686,57 +997,15 @@ static void raster(GE *g, V3 a, V3 b, V3 c) {
     /* nothing per pixel needs z: no texture, light, fog or depth */
     int noz = !g->tex_bpp && !lit && !fog && !ztest && !zenable;
     float zflat = 1.0f / ra;
-    for (int y = y0; y <= y1; y++) {
-        float py_ = (float)y + 0.5f;
-        /* the span where w0, w1, w2 >= 0 on this row (one pixel of slack each
-         * side; the exact test below still decides) */
-        float w0x = ((c.x - b.x) * (py_ - b.y) + (c.y - b.y) * b.x) * rarea;   /* w0 at px = 0 */
-        float w1x = ((a.x - c.x) * (py_ - c.y) + (a.y - c.y) * c.x) * rarea;
-        float lo = (float)x0, hi = (float)x1 + 1;
-        /* w = s * px + w_at_0 >= 0 */
-        float ss[3] = { s0, s1, -s0 - s1 }, ww[3] = { w0x, w1x, 1.0f - w0x - w1x };
-        for (int i = 0; i < 3; i++) {
-            if (ss[i] > 0) { float t = -ww[i] / ss[i]; if (t > lo) lo = t; }
-            else if (ss[i] < 0) { float t = -ww[i] / ss[i]; if (t < hi) hi = t; }
-            else if (ww[i] < -1e-4f) { lo = hi + 1; break; }
-        }
-        int xs = (int)floorf(lo - 0.5f) - 1, xe = (int)ceilf(hi - 0.5f) + 1;
-        if (xs < x0) xs = x0;
-        if (xe > x1) xe = x1;
-        /* the row's surface memory, when px() would give every pixel of it */
-        uint8_t *row = NULL;
-        if (xs >= 0 && xe <= 1023 && y >= g->top) {
-            uint32_t o = g->surface + (uint32_t)(y >> 3) * 16384 + (uint32_t)(y & 7) * 64 - RAM_BASE;
-            if ((uint64_t)o + 16384 <= g->ram_size) row = g->ram + o;
-        }
-        for (int x = xs; x <= xe; x++) {
-            float px_ = (float)x + 0.5f;
-            /* the edge functions are linear in px: w = s * px + w at 0 */
-            float w0 = s0 * px_ + w0x;
-            float w1 = s1 * px_ + w1x;
-            float w2 = 1.0f - w0 - w1;
-            if (w0 < 0 || w1 < 0 || w2 < 0) continue;
-            float z = flat || noz ? zflat : 1.0f / (w0 * ra + w1 * rb + w2 * rc);
-            float *zp = &zbuf[y * 1024 + x];
-            if (ztest && (zless ? z >= *zp : z > *zp)) continue;
-            uint32_t col;
-            if (g->tex_bpp) {
-                col = filtered(g, (w0 * ua + w1 * ub + w2 * uc) * z, (w0 * va + w1 * vb + w2 * vc) * z);
-                if (!col) continue;
-            } else col = a.c | 0x100000u;
-            if (lit || fog) {
-                float l[3];
-                for (int k = 0; k < 3; k++) l[k] = (w0 * la[k] + w1 * lb[k] + w2 * lc[k]) * z;
-                col = shade(col, l, z);
-            }
-            uint16_t *p = row ? (uint16_t *)(row + (x >> 5) * 512) + (x & 31) : px(g, x, y);
-            if (p) {
-                *p = blend_px(*p, col); if (zenable) *zp = z; g->pixels++;
-                if (watch_x >= 0) watch(g, x, y, *p);
-                abuf[y * 1024 + x] = g->tex_bpp && (g->tex_fmt & 0x100) ? (uint8_t)(col >> 16 & 31) : 0;
-            }
-        }
-    }
+    RTri r = { g, a, b, c, x0, x1, tw, th, lit, fog, ztest, flat, noz,
+               ra, rb, rc, ua, ub, uc, va, vb, vc,
+               { la[0], la[1], la[2] }, { lb[0], lb[1], lb[2] }, { lc[0], lc[1], lc[2] },
+               rarea, s0, s1, zflat };
+    filter_init();
+    if (watch_x < 0 && !g->trace && (long)(x1 - x0 + 1) * (y1 - y0 + 1) >= 8192 &&
+        pool_rows(g, &r, y0, y1))
+        return;
+    g->pixels += raster_rows(&r, y0, y1);
 }
 
 /* Near plane: triangles entirely in front are drawn; crossing ones are
@@ -1027,18 +1296,22 @@ static void run(GE *g, uint32_t pc, uint32_t end, int depth) {
         /* 0x1C: render mode, default 0x006760. Bits 15-23 a per-object counter
          * (Cars / Bratz / SpongeBob world models, with 1E bit 2 = 0xE234), low bits
          * flags: bit 3 with that counter, bit 6 clear on SpongeBob's blender glass,
-         * bits 6+9 clear on Dingo's title sky. Bit 6 is not plain backface culling
-         * (VFLASH_CULL tried it: it deleted Spider-Man's and Dingo's skies, drawn
-         * under 0x6760). No effect modelled yet. */
+         * bits 6+9 clear on Dingo's title sky. Bit 6 = back faces culled (raster();
+         * tried in September before the strips had a consistent winding, it then
+         * deleted Spider-Man's and Dingo's skies - Spider-Man's is whole now, Dingo
+         * not rechecked). */
         case 0x1C: reg1c = w & 0xFFFFFF; break;
         /* 0x10000000 a: once a frame, alone in a list after the depth clear, with a
          * RAM address (Spider-Man 0x10B40128: zeroed at boot, never read by the CPU)
          * - a readback / fence destination. Two words; the address used to be run
          * as a command (the "unknown op 10" at 10Bxxxxx). */
         case 0x10: pc += 4; break;
-        case 0x1E:
-            zenable = (w & 0x8000) != 0;
+        case 0x1E: {
+            static int t14 = -1;
+            if (t14 < 0) t14 = !getenv("VFLASH_ZTEST14") || atoi(getenv("VFLASH_ZTEST14"));
+            zenable = (w & 0x8000) ? 1 : (t14 && (w & 0x4000)) ? 2 : 0;
             break;
+        }
         case 0x0C:   /* 0x0C000000 a: the vertex buffer for the model called next
                       * (like 0x0A inside a model; Bratz's indexed models rely on it) */
             g->vb = rd(g, pc);
@@ -1101,6 +1374,10 @@ static void run(GE *g, uint32_t pc, uint32_t end, int depth) {
                 if (y1 > 1024) y1 = 1024;
                 for (int y = y0; y < y1; y++)
                     for (int x = x0; x < x1; x++) zbuf[y * 1024 + x] = clear_depth;
+                if (zfill) {
+                    zal_ox = g->clip_x0; zal_oy = g->clip_y0;
+                    zal_w = px0 + fw; zal_h = py0 + fh;
+                }
                 break;
             }
             fill(g, (int)(p & 0xFFFF), (int)(p >> 16), (int)(s & 0xFFFF), (int)(s >> 16), (uint16_t)c);
@@ -1127,9 +1404,14 @@ static void run(GE *g, uint32_t pc, uint32_t end, int depth) {
 
 static int init;   /* zbuf filled far; set by a loaded state too */
 void ge_run(GE *g, uint32_t list) {
+    /* read here, not with init: a loaded state sets init first */
+    static int watch_read;
+    if (!watch_read) {
+        watch_read = 1;
+        if (getenv("VFLASH_GEWATCH")) sscanf(getenv("VFLASH_GEWATCH"), "%d,%d", &watch_x, &watch_y);
+    }
     if (!init) {
         init = 1;
-        if (getenv("VFLASH_GEWATCH")) sscanf(getenv("VFLASH_GEWATCH"), "%d,%d", &watch_x, &watch_y);
         /* depth starts far, not 0: until a game's first depth clear reaches a
          * region, a zeroed buffer failed every test there (replays starting
          * mid-frame lost whole models, e.g. the Bratz room's girl) */

@@ -6,9 +6,24 @@
  * ten CDDA sectors per planar channel; end is the final 16-bit sample address.
  * Gain FF/FF00 routes a mono stream left/right. Broader mode/gain/envelope
  * behavior is not inferred from these two configurations. */
+/* Streamed signed 16-bit PCM looping through a ring (mode 0x10), with the
+ * rate bits of the plain-PCM family: 0x10 at the output rate, 0x14 at 22050
+ * Hz, 0x18 at 11025 Hz. Bratz Fashion Pixiez reads its tutorial texts aloud
+ * as mode 0x14 on both channels (+0x20 = 0xFFFF) from a 36 KB ring it refills
+ * from the disc as +0x28 moves on; refused, the voice never ran, the ring
+ * never drained and the game stopped answering (#8, TobiasAR). */
+static unsigned stream_rate_div(const uint32_t *r) {
+    return (r[3] & 4) ? 2 : (r[3] & 8) ? 4 : 1;
+}
+static int stream_mode(uint32_t mode) {
+    return mode == 0x10 || mode == 0x14 || mode == 0x18;
+}
+
 static int stream_supported(const uint32_t *r) {
-    int streaming = r[3] == 0x10 && r[7] == 0xffffffff &&
-                    (r[8] == 0xff || r[8] == 0xff00);
+    /* +0x20: the gains; Bratz sets 0xFFFF at key-on, then 0xFFFFFFFF */
+    int streaming = stream_mode(r[3]) && r[7] == 0xffffffff &&
+                    (r[8] == 0xff || r[8] == 0xff00 || r[8] == 0xffff ||
+                     r[8] == 0xffffffff);
     /* BIOS UI records100B2EB4/EE0/F0 point directly into mono signed16LE
      * RIFF/WAVE payloads whose headers specify22050Hz, proving this tuple. */
     int ui = r[3] == 0x1e4 &&
@@ -137,8 +152,9 @@ void midi_write(Midi *m, uint32_t o, uint32_t value, uint32_t pc) {
     if ((o & 3) || o >= MIDI_REGISTER_BYTES) return;
     if (o == 0x1004) {
         /* BIOS1008A8E4 acknowledges one of six pending sources by writing
-         * its bit while preserving upper control fields. Event timing and
-         * source generation remain unimplemented; writes cannot raise IRQs. */
+         * its bit while preserving upper control fields. Sources raised:
+         * 1 the timer (hw.c), 0 the voice address mark (voice_moved); the
+         * others are not known. Writes cannot raise IRQs. */
         m->regs[o / 4] = (value & ~0x3fu) |
                          (m->regs[o / 4] & 0x3fu & ~value);
         return;
@@ -179,6 +195,19 @@ static int16_t clip(int32_t v) {
     return v > 32767 ? 32767 : v < -32768 ? -32768 : (int16_t)v;
 }
 
+/* Source 0 of the six at 0x1004 (enabled by bit 8 there, as bit 9 runs the
+ * timer of source 1): a voice reading past the address at 0x1020. Bratz
+ * Fashion Pixiez's speech stream sets it inside the voice's ring
+ * (0x10403000 in a ring at 0x10400000) and refills the ring from the
+ * source 0 handler (0x109D71E4 sets the flag its stream task waits for),
+ * moving the mark on; without the event the ring was never refilled and the
+ * game waited forever (#8). */
+static void voice_moved(Midi *m, uint32_t from, uint32_t to) {
+    uint32_t mark = m->regs[0x1020 / 4];
+    if ((m->regs[0x1004 / 4] & 0x100) && mark && from < mark && to >= mark)
+        m->regs[0x1004 / 4] |= 1;
+}
+
 void midi_render(Midi *m, int16_t *stereo, unsigned frames) {
     unsigned i, v;
     for (i = 0; i < frames; i++) {
@@ -214,9 +243,12 @@ void midi_render(Midi *m, int16_t *stereo, unsigned frames) {
                             /* One-shot voices stop on their last sample, the
                              * cursor left there: vtech-lib waits for +0x28 to
                              * reach the end before starting the next pass */
-                            if (r[3] & 0x10) m->cursor[v] = r[2];
+                            if (r[3] & 0x10) { m->cursor[v] = r[2]; voice_moved(m, r[2] - 1, r[2]); }
                             else { m->cursor[v] = r[1]; m->active &= ~bit; m->dry_voices |= bit; m->dry_ends++; break; }
-                        } else m->cursor[v] += eight ? 1 : 2;
+                        } else {
+                            voice_moved(m, m->cursor[v], m->cursor[v] + (eight ? 1 : 2));
+                            m->cursor[v] += eight ? 1 : 2;
+                        }
                     }
                 }
                 continue;
@@ -239,27 +271,29 @@ void midi_render(Midi *m, int16_t *stereo, unsigned frames) {
                 if (r[8] & 0xff) left += sample;
                 if (r[8] & 0xff00) right += sample;
             }
-            if (r[3] == 0x1e4 || (ima && !music)) {
+            if (r[3] == 0x1e4 || (ima && !music) || r[3] == 0x14 || r[3] == 0x18) {
                 /* BIOS1003A1F8 maps ratebits4 to22050Hz,8 to11025Hz.
                  * Soundfont mode2 instead uses the pitch accumulator above. */
-                unsigned divisor=r[3]==0x12?1:(r[3]==0x1ea || r[3]==0x1fa)?4:2;
+                unsigned divisor=r[3]==0x12?1:(r[3]==0x1ea || r[3]==0x1fa)?4:
+                                 stream_mode(r[3])?stream_rate_div(r):2;
                 m->half_phase[v]=(uint8_t)((m->half_phase[v]+1)%divisor);
                 if (m->half_phase[v]) continue;
             }
             if(ima) {
                 m->ima_pos[v]++;
-                if(!(m->ima_pos[v]&1))m->cursor[v]++;
+                if(!(m->ima_pos[v]&1)) { voice_moved(m, m->cursor[v], m->cursor[v] + 1); m->cursor[v]++; }
                 if(m->ima_pos[v]==64 && m->cursor[v]>r[1]) {
-                    if(r[3]&0x10) m->cursor[v]=r[2];
+                    if(r[3]&0x10) { m->cursor[v]=r[2]; voice_moved(m, r[2] - 1, r[2]); }
                     else m->active&=~bit;
                 }
                 continue;
             }
             if (m->cursor[v] >= r[1]) {
-                if (r[3] == 0x10) m->cursor[v] = r[2];
+                /* looping back reaches the loop start: a mark there counts */
+                if (stream_mode(r[3])) { m->cursor[v] = r[2]; voice_moved(m, r[2] - 1, r[2]); }
                 else m->active &= ~bit;
             }
-            else m->cursor[v] += 2;
+            else { voice_moved(m, m->cursor[v], m->cursor[v] + 2); m->cursor[v] += 2; }
         }
         if (m->dry_voices) m->dry_samples++;
         /* Linear gain before final saturation is an approximation; exact

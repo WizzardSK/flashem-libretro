@@ -49,7 +49,7 @@ else
 	SDL_CFLAGS = $(shell sdl2-config --cflags) -I$(shell sdl2-config --prefix)/include
 	O     = .o
 	EXE   =
-	LDFLAGS += $(shell sdl2-config --libs) -lm
+	LDFLAGS += $(shell sdl2-config --libs) -lm -pthread
 endif
 
 CFLAGS += -O2 -Wall -Wextra -Iinclude $(SDL_CFLAGS)

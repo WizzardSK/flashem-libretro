@@ -29,6 +29,8 @@ typedef struct GE {
 } GE;
 
 void ge_run(GE *g, uint32_t list);
+/* Ends the rasteriser's helper threads (they start again when needed) */
+void ge_shutdown(void);
 /* Save states: the engine's own buffers and registers (one engine) */
 size_t ge_state_size(void);
 void   ge_state_save(uint8_t *p);
